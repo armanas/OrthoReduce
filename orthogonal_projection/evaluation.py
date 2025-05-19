@@ -12,8 +12,13 @@ def compute_distortion(X, Y, epsilon=1e-9):
     # Avoid division by zero or near-zero distances
     distortion = np.abs(D_red_sq - D_orig_sq) / (D_orig_sq + epsilon)
 
+    # Mask out the diagonal so self-distances do not skew the statistics
+    mask = ~np.eye(distortion.shape[0], dtype=bool)
+    distortion_mean = distortion[mask].mean()
+    distortion_max = distortion[mask].max()
+
     # Return the distance matrices for debugging if needed
-    return distortion.mean(), distortion.max(), D_orig_sq, D_red_sq
+    return distortion_mean, distortion_max, D_orig_sq, D_red_sq
 
 def nearest_neighbor_overlap(X, Y, k=10):
     """Evaluate nearest-neighbor preservation after projection."""
