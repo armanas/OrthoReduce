@@ -3,7 +3,13 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 
 def compute_distortion(X, Y, epsilon=1e-9):
-    """Compute distortion of pairwise distances after projection."""
+    """Compute distortion of pairwise distances after projection.
+
+    Returns
+    -------
+    tuple
+        (mean_distortion, max_distortion, D_orig_sq, D_red_sq)
+    """
     D_original = pairwise_distances(X)
     D_reduced = pairwise_distances(Y)
     D_orig_sq = D_original ** 2
