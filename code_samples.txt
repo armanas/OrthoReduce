@@ -1,0 +1,66 @@
+def factorial(n):
+    if n == 0:
+        return 1
+    else:
+        return n * factorial(n-1)
+===
+class BinarySearchTree:
+    def __init__(self):
+        self.root = None
+===
+for i in range(10):
+    if i % 2 == 0:
+        print(f"{i} is even")
+===
+import numpy as np
+X = np.random.randn(100, 50)
+X = X / np.linalg.norm(X, axis=1, keepdims=True)
+===
+def quick_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    middle = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quick_sort(left) + middle + quick_sort(right)
+===
+try:
+    with open('file.txt', 'r') as f:
+        data = f.read()
+except FileNotFoundError:
+    print('File not found')
+===
+def generate_fibonacci(n):
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+===
+class Node:
+    def __init__(self, value):
+        self.value = value
+        self.next = None
+===
+def memoize(func):
+    cache = {}
+    def wrapper(*args):
+        if args not in cache:
+            cache[args] = func(*args)
+        return cache[args]
+    return wrapper
+===
+@memoize
+def fibonacci(n):
+    if n < 2:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+===
+x = [1, 2, 3, 4, 5]
+y = [i * i for i in x]
+z = list(map(lambda i: i * i, x))
+===
+colors = {'red': '#FF0000', 'green': '#00FF00', 'blue': '#0000FF'}
+for color, hex_value in colors.items():
+    print(f"{color}: {hex_value}")
+===
