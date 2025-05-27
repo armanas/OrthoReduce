@@ -152,6 +152,9 @@ def run_experiment(n=15000, d=1200, epsilon=0.2, seed=42, sample_size=5000):
         epsilon=epsilon, 
         seed=seed, 
         sample_size=sample_size,
+        use_convex=False,
+        n_clusters=10,
+        cluster_std=0.5,
         use_poincare=True,
         use_spherical=True,
         use_elliptic=False

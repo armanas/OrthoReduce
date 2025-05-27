@@ -1,6 +1,9 @@
 from .projection import jll_dimension, generate_orthogonal_basis, project_data
 from .dimensionality_reduction import (
     softmax,
+    generate_mixture_gaussians,
+    project_onto_convex_hull,
+    run_convex,
     compute_distortion_sample as compute_distortion,
     rank_corr as evaluate_rank_correlation,
     dist_stats as distribution_stats,
