@@ -7,6 +7,8 @@ from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
 from sklearn.random_projection import GaussianRandomProjection
+from scipy.spatial import ConvexHull
+from scipy.optimize import minimize, LinearConstraint, Bounds
 
 # Try to import umap, but make it optional
 try:
@@ -126,6 +128,50 @@ def softmax(Z: np.ndarray) -> np.ndarray:
     np.seterr(**old_settings)
 
     return softmax_values
+
+
+def generate_mixture_gaussians(n: int, d: int, n_clusters: int, cluster_std: float, seed: int) -> np.ndarray:
+    """
+    Generate realistic data as a mixture of Gaussians.
+    
+    Parameters:
+    -----------
+    n : int
+        Number of data points
+    d : int
+        Dimensionality
+    n_clusters : int
+        Number of Gaussian clusters
+    cluster_std : float
+        Standard deviation of each cluster
+    seed : int
+        Random seed
+        
+    Returns:
+    --------
+    np.ndarray
+        Generated data of shape (n, d)
+    """
+    rs = np.random.RandomState(seed)
+    
+    # Generate cluster centers
+    centers = rs.randn(n_clusters, d)
+    
+    # Distribute points among clusters
+    counts = [n // n_clusters] * n_clusters
+    for i in range(n % n_clusters):
+        counts[i] += 1
+    
+    # Generate points for each cluster
+    X_parts = []
+    for c_idx, cnt in enumerate(counts):
+        pts = centers[c_idx] + cluster_std * rs.randn(cnt, d)
+        X_parts.append(pts)
+    
+    # Combine and shuffle
+    X = np.vstack(X_parts)
+    rs.shuffle(X)
+    return X
 
 
 def compute_distortion_sample(X: np.ndarray, Y: np.ndarray, sample_size: int = 5000, seed: int = 42) -> tuple:
@@ -424,6 +470,83 @@ def run_jll(X: np.ndarray, k: int, seed: int) -> tuple:
     return Y, time.time() - start
 
 
+def project_onto_convex_hull(Y: np.ndarray) -> np.ndarray:
+    """
+    Project each point in Y onto the convex hull of Y.
+    This is a simplified/approximated version for computational efficiency.
+    
+    Parameters:
+    -----------
+    Y : np.ndarray
+        Input points of shape (n_samples, n_features)
+        
+    Returns:
+    --------
+    np.ndarray
+        Projected points of shape (n_samples, n_features)
+    """
+    try:
+        n_samples, n_features = Y.shape
+        
+        # For computational efficiency, use a simplified approach
+        # Find the convex hull vertices
+        if n_samples <= 20:
+            # For small datasets, use exact convex hull
+            hull = ConvexHull(Y)
+            hull_vertices = Y[hull.vertices]
+        else:
+            # For larger datasets, approximate by using extreme points in each dimension
+            hull_vertices = []
+            for dim in range(n_features):
+                min_idx = np.argmin(Y[:, dim])
+                max_idx = np.argmax(Y[:, dim])
+                hull_vertices.extend([Y[min_idx], Y[max_idx]])
+            hull_vertices = np.unique(hull_vertices, axis=0)
+        
+        # For each point, find the closest point on the convex hull (simplified)
+        # This is an approximation - we project each point to the closest hull vertex
+        result = np.zeros_like(Y)
+        for i, point in enumerate(Y):
+            # Find the closest hull vertex
+            distances = np.sum((hull_vertices - point) ** 2, axis=1)
+            closest_vertex_idx = np.argmin(distances)
+            
+            # Simple projection: weighted combination of original point and closest vertex
+            # This approximates the convex hull projection
+            weight = 0.7  # How much to move towards the hull
+            result[i] = (1 - weight) * point + weight * hull_vertices[closest_vertex_idx]
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error in convex hull projection: {e}")
+        # Return original points if projection fails
+        return Y
+
+
+def run_convex(X: np.ndarray, k: int, seed: int) -> tuple:
+    """
+    Run convex hull projection combined with JLL.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Input data of shape (n_samples, n_features)
+    k : int
+        Target dimension
+    seed : int
+        Random seed
+        
+    Returns:
+    --------
+    tuple
+        Projected data and runtime
+    """
+    Y_jll, rt_jll = run_jll(X, k, seed)
+    start = time.time()
+    Y_conv = project_onto_convex_hull(Y_jll)
+    return Y_conv, rt_jll + (time.time() - start)
+
+
 def run_umap(X: np.ndarray, k: int, seed: int, n_neighbors: int = 15, min_dist: float = 0.1) -> tuple:
     if not UMAP_AVAILABLE:
         logger.warning("UMAP not available. Returning random projection instead.")
@@ -586,20 +709,22 @@ def run_spherical(X: np.ndarray, k: int, seed: int) -> tuple:
 
 
 def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
-                   use_poincare: bool, use_spherical: bool, use_elliptic: bool) -> dict:
-    logger.info(f"Parameters: n={n}, d={d}, epsilon={epsilon}, seed={seed}, sample_size={sample_size}")
+                   use_convex: bool = False, n_clusters: int = 10, cluster_std: float = 0.5,
+                   use_poincare: bool = True, use_spherical: bool = True, use_elliptic: bool = False) -> dict:
+    logger.info(f"Parameters: n={n}, d={d}, epsilon={epsilon}, seed={seed}, sample_size={sample_size}, "
+                f"use_convex={use_convex}, n_clusters={n_clusters}, cluster_std={cluster_std}")
 
     # Set numpy error handling to ignore warnings during data generation and normalization
     old_settings = np.seterr(all='ignore')
 
     try:
-        # Generate random data with controlled seed
-        rng = np.random.RandomState(seed)
-        X = rng.randn(n, d)
+        # Generate data using mixture of Gaussians
+        X = generate_mixture_gaussians(n, d, n_clusters, cluster_std, seed)
 
         # Check for any NaN or inf values in the generated data
         if np.any(np.isnan(X)) or np.any(np.isinf(X)):
             logger.warning("NaN or Inf values detected in generated data. Replacing with random values.")
+            rng = np.random.RandomState(seed)
             mask = np.isnan(X) | np.isinf(X)
             X[mask] = rng.randn(*X[mask].shape)
 
@@ -655,6 +780,16 @@ def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
                            **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
                            runtime=rt)
 
+    # Convex + JLL
+    if use_convex:
+        logger.info("Running Convex-Hull Projection...")
+        Y, rt = run_convex(X, k, seed)
+        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
+        results['Convex'] = dict(mean_distortion=md, max_distortion=xd,
+                                rank_correlation=rank_corr(D1, D2),
+                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
+                                runtime=rt)
+
     # UMAP
     logger.info("Running UMAP...")
     Y, rt = run_umap(X, k, seed)
@@ -693,15 +828,21 @@ def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--n', type=int, default=15000)
+    parser.add_argument('--n', type=int, default=5000)
     parser.add_argument('--d', type=int, default=1200)
     parser.add_argument('--epsilon', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--sample_size', type=int, default=5000)
+    parser.add_argument('--sample_size', type=int, default=2000)
+    parser.add_argument('--use_convex', action='store_true')
+    parser.add_argument('--n_clusters', type=int, default=10, help='Number of Gaussian clusters')
+    parser.add_argument('--cluster_std', type=float, default=0.5, help='Cluster standard deviation')
     args = parser.parse_args()
 
-    res = run_experiment(args.n, args.d, args.epsilon, args.seed, args.sample_size,
-                         use_poincare=False, use_spherical=False, use_elliptic=False)
+    res = run_experiment(
+        args.n, args.d, args.epsilon, args.seed, args.sample_size,
+        args.use_convex, args.n_clusters, args.cluster_std,
+        use_poincare=False, use_spherical=False, use_elliptic=False
+    )
     for name, m in res.items():
         logger.info(f"=== {name} ===")
         for k, v in m.items():

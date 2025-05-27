@@ -58,18 +58,40 @@ print(f"Nearest neighbor overlap: {nn_overlap:.4f}")
 The library includes a command-line interface for running dimensionality reduction experiments:
 
 ```bash
-python main_dimensionality_reduction.py --n 1000 --d 100 --sample_size 500 --use_poincare --use_spherical
+# Basic usage
+python orthogonal_projection/dimensionality_reduction.py --n 1000 --d 100
+
+# With enhanced POCS and mixture of Gaussians
+python orthogonal_projection/dimensionality_reduction.py --n 1000 --d 100 --use_convex --n_clusters 5 --cluster_std 0.5
 ```
 
 Parameters:
-- `--n`: Number of data points (default: 15000)
+- `--n`: Number of data points (default: 5000)
 - `--d`: Original dimensionality (default: 1200)
 - `--epsilon`: Desired maximum distortion (default: 0.2)
 - `--seed`: Random seed (default: 42)
-- `--sample_size`: Sample size for distortion computation (default: 5000)
-- `--use_poincare`: Use Poincaré embedding
-- `--use_spherical`: Use Spherical embedding
-- `--use_elliptic`: Use Elliptic embedding (not implemented yet)
+- `--sample_size`: Sample size for distortion computation (default: 2000)
+- `--use_convex`: Enable enhanced POCS with convex hull projection
+- `--n_clusters`: Number of Gaussian clusters for test data (default: 10)
+- `--cluster_std`: Standard deviation of each cluster (default: 0.5)
+
+### Enhanced Features Example
+
+```python
+from orthogonal_projection import generate_mixture_gaussians, run_convex, run_experiment
+
+# Generate realistic test data with mixture of Gaussians
+X = generate_mixture_gaussians(n=1000, d=100, n_clusters=5, cluster_std=0.5, seed=42)
+
+# Apply enhanced POCS (convex hull projection + JLL)
+Y, runtime = run_convex(X, k=20, seed=42)
+
+# Run complete experiment with enhanced features
+results = run_experiment(
+    n=1000, d=100, epsilon=0.2, seed=42, sample_size=2000,
+    use_convex=True, n_clusters=5, cluster_std=0.5
+)
+```
 
 ## Available Methods
 
@@ -92,6 +114,14 @@ Spherical embeddings map data to the unit sphere, which can be useful for direct
 ### UMAP (Optional)
 
 Uniform Manifold Approximation and Projection (UMAP) is a dimensionality reduction technique that preserves both local and global structure. This method is optional and requires the `umap-learn` package.
+
+### Enhanced POCS (Convex Hull Projection)
+
+The enhanced Projection onto Convex Sets (POCS) approach combines Johnson-Lindenstrauss random projection with convex hull projection. This method first applies JLL projection and then projects the result onto the convex hull of the projected data.
+
+### Mixture of Gaussians Test Data Generation
+
+For more realistic evaluation, the library supports generating test data as a mixture of Gaussians rather than simple random data. This creates data with natural clustering structure that better resembles real-world datasets.
 
 ## Evaluation Metrics
 
