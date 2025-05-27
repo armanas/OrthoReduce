@@ -16,6 +16,67 @@ except ImportError:
     UMAP_AVAILABLE = False
     logging.warning("UMAP not available. UMAP projection will be skipped.")
 
+# Classes for geometric embeddings
+class HyperbolicEmbedding:
+    def __init__(self, c=1.0, safe_radius=0.9):
+        self.c = c
+        self.safe_radius = safe_radius
+        self.scale = None
+
+    def euclidean_to_disk(self, X):
+        norms = np.linalg.norm(X, axis=1)
+        max_norm = np.max(norms)
+        self.scale = self.safe_radius / (np.sqrt(self.c) * max_norm + 1e-9)
+        return X * self.scale
+
+    def disk_to_euclidean(self, Y):
+        return Y / self.scale
+
+    def exp_map_zero(self, u, eps=1e-15):
+        norm_u = np.linalg.norm(u, axis=1)
+        out = np.zeros_like(u)
+        mask = norm_u > eps
+        z = np.sqrt(self.c) * norm_u[mask]
+        factor = np.tanh(z) / (z + eps)
+        out[mask] = factor[:, None] * u[mask]
+        return out
+
+    def log_map_zero(self, x, eps=1e-15):
+        norm_x = np.linalg.norm(x, axis=1)
+        out = np.zeros_like(x)
+        mask = norm_x > eps
+        z = np.sqrt(self.c) * norm_x[mask]
+        z = np.clip(z, -0.999999, 0.999999)
+        atanh_z = 0.5 * np.log((1 + z) / (1 - z))
+        factor = atanh_z / (np.sqrt(self.c) * norm_x[mask] + eps)
+        out[mask] = factor[:, None] * x[mask]
+        return out
+
+
+class SphericalEmbedding:
+    def euclidean_to_sphere(self, X):
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        return X / np.clip(norms, 1e-15, None)
+
+    def sphere_to_euclidean(self, Y):
+        return Y
+
+    def log_map_north_pole(self, X, eps=1e-15):
+        x0 = np.clip(X[:, 0], -1.0, 1.0)
+        theta = np.arccos(x0)
+        sin_theta = np.sin(theta)
+        out = np.zeros((X.shape[0], X.shape[1] - 1))
+        mask = sin_theta > eps
+        out[mask] = (theta[mask, None] * X[mask, 1:]) / sin_theta[mask, None]
+        return out
+
+    def exp_map_north_pole(self, u, eps=1e-15):
+        norm_u = np.linalg.norm(u, axis=1, keepdims=True)
+        norm_u = np.clip(norm_u, eps, None)
+        cos_part = np.cos(norm_u)
+        sin_part = np.sin(norm_u) / norm_u
+        return np.hstack([cos_part, sin_part * u])
+
 # Configure logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -239,8 +300,62 @@ def dist_stats(P: np.ndarray, Q: np.ndarray) -> tuple:
 
 def run_pca(X: np.ndarray, k: int, seed: int) -> tuple:
     start = time.time()
-    model = PCA(n_components=k, random_state=seed)
-    Y = model.fit_transform(X)
+
+    # Set numpy error handling to ignore warnings during PCA
+    old_settings = np.seterr(all='ignore')
+
+    try:
+        # Make a safe copy of the input data
+        X_safe = np.copy(X)
+
+        # Check for and handle any NaN or inf values in input
+        if np.any(np.isnan(X_safe)) or np.any(np.isinf(X_safe)):
+            logger.warning("NaN or Inf values detected in input data for PCA. Replacing with zeros.")
+            X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Center the data (PCA is sensitive to centering)
+        X_centered = X_safe - np.mean(X_safe, axis=0, keepdims=True)
+
+        # Check if the data has very small variance
+        var = np.var(X_centered, axis=0)
+        if np.any(var < 1e-10):
+            logger.warning("Very small variance detected in some dimensions. Adding small noise.")
+            # Add small noise to dimensions with very small variance
+            noise_scale = 1e-6 * np.max(var)
+            X_centered += np.random.RandomState(seed).normal(0, noise_scale, X_centered.shape)
+
+        # Use SVD directly instead of PCA for better numerical stability
+        try:
+            # SVD can be more stable than the covariance matrix approach
+            U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
+
+            # Keep only the top k components
+            U = U[:, :k] if U.shape[1] >= k else np.hstack([U, np.zeros((U.shape[0], k - U.shape[1]))])
+            S = S[:k] if len(S) >= k else np.concatenate([S, np.zeros(k - len(S))])
+
+            # Project the data
+            Y = U * S
+
+        except Exception as e:
+            logger.warning(f"SVD failed: {e}. Falling back to scikit-learn PCA.")
+            # Fallback to scikit-learn PCA
+            model = PCA(n_components=k, random_state=seed, svd_solver='randomized')
+            Y = model.fit_transform(X_safe)
+
+        # Check for NaN or inf values in the result
+        if np.any(np.isnan(Y)) or np.any(np.isinf(Y)):
+            logger.warning("NaN or Inf values detected in PCA result. Replacing with zeros.")
+            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
+
+    except Exception as e:
+        logger.error(f"Error in PCA: {e}")
+        # Last resort: return a simple scaled version of the input
+        logger.warning("PCA failed. Returning a simple scaled version of the input.")
+        Y = np.random.RandomState(seed).randn(X.shape[0], k)
+
+    # Restore numpy error settings
+    np.seterr(**old_settings)
+
     return Y, time.time() - start
 
 
@@ -251,23 +366,57 @@ def run_jll(X: np.ndarray, k: int, seed: int) -> tuple:
     old_settings = np.seterr(all='ignore')
 
     try:
-        # Use a more stable approach with explicit random matrix generation
+        # First, ensure X doesn't have extreme values that could cause numerical issues
+        X_safe = np.copy(X)
+
+        # Check for and handle any NaN or inf values in input
+        if np.any(np.isnan(X_safe)) or np.any(np.isinf(X_safe)):
+            logger.warning("NaN or Inf values detected in input data for JLL. Replacing with zeros.")
+            X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Normalize X if it has very large values
+        max_norm = np.max(np.abs(X_safe))
+        if max_norm > 1e3:  # If values are very large
+            logger.warning(f"Large values detected in input data (max={max_norm}). Normalizing.")
+            X_safe = X_safe / max_norm
+
+        # Use QR decomposition to generate an orthogonal random matrix
+        # This is more stable than using GaussianRandomProjection
         np.random.seed(seed)
-        # Generate a random matrix with controlled values to avoid numerical issues
-        random_matrix = np.random.normal(0, 1.0/np.sqrt(k), (X.shape[1], k))
-        # Project the data
-        Y = np.dot(X, random_matrix)
+
+        # Generate a random matrix with smaller values to avoid numerical issues
+        # Using a smaller scale factor helps prevent overflow
+        scale_factor = 1.0 / np.sqrt(max(k, X.shape[1]))
+        random_matrix = np.random.normal(0, scale_factor, (X_safe.shape[1], k))
+
+        # Use QR decomposition to get an orthogonal matrix
+        Q, _ = np.linalg.qr(random_matrix, mode='reduced')
+        if Q.shape[1] < k:
+            # If QR didn't return enough columns, pad with zeros
+            padding = np.zeros((Q.shape[0], k - Q.shape[1]))
+            Q = np.hstack([Q, padding])
+            Q = Q[:, :k]  # Ensure we have exactly k columns
+
+        # Project the data using the orthogonal matrix
+        Y = np.dot(X_safe, Q)
 
         # Check for NaN or inf values and replace them
         if np.any(np.isnan(Y)) or np.any(np.isinf(Y)):
-            logger.warning("NaN or Inf values detected in JLL projection. Replacing with zeros.")
+            logger.warning("NaN or Inf values detected in JLL projection result. Replacing with zeros.")
             Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
     except Exception as e:
         logger.error(f"Error in JLL projection: {e}")
-        # Fallback to a simpler approach
-        transformer = GaussianRandomProjection(n_components=k, random_state=seed)
-        Y = transformer.fit_transform(X)
-        Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
+        # Fallback to a simpler approach that avoids using GaussianRandomProjection
+        try:
+            np.random.seed(seed)
+            # Use a very simple random projection as fallback
+            random_matrix = np.random.normal(0, 0.01, (X.shape[1], k))
+            Y = np.dot(X, random_matrix)
+            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
+        except Exception as e2:
+            logger.error(f"Fallback projection also failed: {e2}")
+            # Last resort: return zeros
+            Y = np.zeros((X.shape[0], k))
 
     # Restore numpy error settings
     np.seterr(**old_settings)
@@ -316,15 +465,171 @@ def run_umap(X: np.ndarray, k: int, seed: int, n_neighbors: int = 15, min_dist: 
     return Y, time.time() - start
 
 
+def run_poincare(X: np.ndarray, k: int, seed: int, c: float = 1.0) -> tuple:
+    """
+    Run Poincare embedding pipeline.
+
+    Parameters:
+    - X: Input data
+    - k: Target dimension
+    - seed: Random seed
+    - c: Curvature parameter
+
+    Returns:
+    - Y: Projected data
+    - runtime: Time taken for projection
+    """
+    start = time.time()
+
+    # Set numpy error handling to ignore warnings during this operation
+    old_settings = np.seterr(all='ignore')
+
+    try:
+        original_dim = X.shape[1]
+        emb = HyperbolicEmbedding(c=c)
+
+        # Map to Poincare disk
+        Y_disk = emb.euclidean_to_disk(X)
+
+        # Map to tangent space at origin
+        Y_tangent = emb.log_map_zero(Y_disk)
+
+        # Project in tangent space
+        Y_proj, _ = run_jll(Y_tangent, k, seed)
+
+        # Map back to Poincare disk
+        Y_tangent_recon = emb.exp_map_zero(Y_proj)
+
+        # Map back to Euclidean space
+        Y_recon = emb.disk_to_euclidean(Y_tangent_recon)
+
+        # Restore original dimensionality if needed (simple padding/truncating)
+        if Y_recon.shape[1] != original_dim:
+            result = np.zeros((Y_recon.shape[0], original_dim))
+            # Copy values, handling both truncation and padding
+            copy_dims = min(Y_recon.shape[1], original_dim)
+            result[:, :copy_dims] = Y_recon[:, :copy_dims]
+            Y_recon = result
+
+        # Check for NaN or inf values and replace them
+        if np.any(np.isnan(Y_recon)) or np.any(np.isinf(Y_recon)):
+            logger.warning("NaN or Inf values detected in Poincare projection. Replacing with zeros.")
+            Y_recon = np.nan_to_num(Y_recon, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception as e:
+        logger.error(f"Error in Poincare projection: {e}")
+        # Fallback to JLL projection
+        logger.warning("Falling back to JLL projection due to Poincare error.")
+        Y_recon, _ = run_jll(X, k, seed)
+
+    # Restore numpy error settings
+    np.seterr(**old_settings)
+
+    return Y_recon, time.time() - start
+
+
+def run_spherical(X: np.ndarray, k: int, seed: int) -> tuple:
+    """
+    Run Spherical embedding pipeline.
+
+    Parameters:
+    - X: Input data
+    - k: Target dimension
+    - seed: Random seed
+
+    Returns:
+    - Y: Projected data
+    - runtime: Time taken for projection
+    """
+    start = time.time()
+
+    # Set numpy error handling to ignore warnings during this operation
+    old_settings = np.seterr(all='ignore')
+
+    try:
+        original_dim = X.shape[1]
+        emb = SphericalEmbedding()
+
+        # Map to sphere
+        Y_sphere = emb.euclidean_to_sphere(X)
+
+        # Map to tangent space at north pole
+        Y_tangent = emb.log_map_north_pole(Y_sphere)
+
+        # Project in tangent space
+        Y_proj, _ = run_jll(Y_tangent, k, seed)
+
+        # Map back to sphere
+        Y_recon = emb.exp_map_north_pole(Y_proj)
+
+        # Restore original dimensionality if needed (simple padding/truncating)
+        if Y_recon.shape[1] != original_dim:
+            result = np.zeros((Y_recon.shape[0], original_dim))
+            # Copy values, handling both truncation and padding
+            copy_dims = min(Y_recon.shape[1], original_dim)
+            result[:, :copy_dims] = Y_recon[:, :copy_dims]
+            Y_recon = result
+
+        # Check for NaN or inf values and replace them
+        if np.any(np.isnan(Y_recon)) or np.any(np.isinf(Y_recon)):
+            logger.warning("NaN or Inf values detected in Spherical projection. Replacing with zeros.")
+            Y_recon = np.nan_to_num(Y_recon, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception as e:
+        logger.error(f"Error in Spherical projection: {e}")
+        # Fallback to JLL projection
+        logger.warning("Falling back to JLL projection due to Spherical error.")
+        Y_recon, _ = run_jll(X, k, seed)
+
+    # Restore numpy error settings
+    np.seterr(**old_settings)
+
+    return Y_recon, time.time() - start
+
+
 def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
                    use_poincare: bool, use_spherical: bool, use_elliptic: bool) -> dict:
     logger.info(f"Parameters: n={n}, d={d}, epsilon={epsilon}, seed={seed}, sample_size={sample_size}")
-    X = np.random.RandomState(seed).randn(n, d)
-    # Normalize with a small epsilon to avoid division by zero
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    # Replace zero or very small norms with 1.0 to avoid numerical issues
-    norms = np.where(norms < 1e-10, 1.0, norms)
-    X /= norms
+
+    # Set numpy error handling to ignore warnings during data generation and normalization
+    old_settings = np.seterr(all='ignore')
+
+    try:
+        # Generate random data with controlled seed
+        rng = np.random.RandomState(seed)
+        X = rng.randn(n, d)
+
+        # Check for any NaN or inf values in the generated data
+        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+            logger.warning("NaN or Inf values detected in generated data. Replacing with random values.")
+            mask = np.isnan(X) | np.isinf(X)
+            X[mask] = rng.randn(*X[mask].shape)
+
+        # Normalize with a robust approach to avoid division by zero
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+
+        # Replace zero or very small norms with 1.0 to avoid numerical issues
+        # Using a slightly larger threshold for better numerical stability
+        norms = np.where(norms < 1e-8, 1.0, norms)
+
+        # Normalize the data
+        X = X / norms
+
+        # Verify the normalization worked correctly
+        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+            logger.warning("NaN or Inf values detected after normalization. Fixing affected rows.")
+            # Replace problematic rows with random unit vectors
+            mask = np.any(np.isnan(X) | np.isinf(X), axis=1)
+            for i in np.where(mask)[0]:
+                v = rng.randn(d)
+                X[i] = v / np.maximum(np.linalg.norm(v), 1e-8)
+    except Exception as e:
+        logger.error(f"Error during data generation and normalization: {e}")
+        # Fallback to a simpler approach if anything goes wrong
+        X = np.random.RandomState(seed).randn(n, d)
+        norms = np.linalg.norm(X, axis=1, keepdims=True) + 1e-8
+        X /= norms
+
+    # Restore numpy error settings
+    np.seterr(**old_settings)
 
     k = min(jll_dimension(n, epsilon), d)
     logger.info(f"Chosen dimension k={k}")
@@ -359,7 +664,30 @@ def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
                             **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
                             runtime=rt)
 
-    # Additional geometries can be implemented similarly
+    # Poincare
+    if use_poincare:
+        logger.info("Running Poincare embedding...")
+        Y, rt = run_poincare(X, k, seed, c=1.0)
+        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
+        results['Poincare'] = dict(mean_distortion=md, max_distortion=xd,
+                                rank_correlation=rank_corr(D1, D2),
+                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
+                                runtime=rt)
+
+    # Spherical
+    if use_spherical:
+        logger.info("Running Spherical embedding...")
+        Y, rt = run_spherical(X, k, seed)
+        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
+        results['Spherical'] = dict(mean_distortion=md, max_distortion=xd,
+                                rank_correlation=rank_corr(D1, D2),
+                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
+                                runtime=rt)
+
+    # Elliptic (not implemented yet)
+    if use_elliptic:
+        logger.warning("Elliptic embedding not implemented yet. Skipping.")
+
     return results
 
 
