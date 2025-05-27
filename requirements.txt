@@ -2,7 +2,4 @@ numpy
 scipy
 scikit-learn
 matplotlib
-transformers
-torch
-sentence-transformers
 umap-learn

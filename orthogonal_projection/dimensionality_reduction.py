@@ -345,6 +345,23 @@ def dist_stats(P: np.ndarray, Q: np.ndarray) -> tuple:
 
 
 def run_pca(X: np.ndarray, k: int, seed: int) -> tuple:
+    """
+    Run Principal Component Analysis (PCA) dimensionality reduction.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Input data of shape (n_samples, n_features)
+    k : int
+        Target dimension
+    seed : int
+        Random seed (for consistency with other methods)
+    
+    Returns:
+    --------
+    tuple
+        (Y, runtime) where Y is the projected data and runtime is the execution time
+    """
     start = time.time()
 
     # Set numpy error handling to ignore warnings during PCA
@@ -406,6 +423,23 @@ def run_pca(X: np.ndarray, k: int, seed: int) -> tuple:
 
 
 def run_jll(X: np.ndarray, k: int, seed: int) -> tuple:
+    """
+    Run Johnson-Lindenstrauss random projection.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Input data of shape (n_samples, n_features)
+    k : int
+        Target dimension
+    seed : int
+        Random seed for reproducibility
+    
+    Returns:
+    --------
+    tuple
+        (Y, runtime) where Y is the projected data and runtime is the execution time
+    """
     start = time.time()
 
     # Set numpy error handling to ignore warnings during this operation
@@ -548,6 +582,27 @@ def run_convex(X: np.ndarray, k: int, seed: int) -> tuple:
 
 
 def run_umap(X: np.ndarray, k: int, seed: int, n_neighbors: int = 15, min_dist: float = 0.1) -> tuple:
+    """
+    Run UMAP (Uniform Manifold Approximation and Projection) dimensionality reduction.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Input data of shape (n_samples, n_features)
+    k : int
+        Target dimension
+    seed : int
+        Random seed for reproducibility
+    n_neighbors : int, optional
+        Number of neighbors for UMAP (default: 15)
+    min_dist : float, optional
+        Minimum distance parameter for UMAP (default: 0.1)
+    
+    Returns:
+    --------
+    tuple
+        (Y, runtime) where Y is the projected data and runtime is the execution time
+    """
     if not UMAP_AVAILABLE:
         logger.warning("UMAP not available. Returning random projection instead.")
         return run_jll(X, k, seed)
@@ -711,6 +766,49 @@ def run_spherical(X: np.ndarray, k: int, seed: int) -> tuple:
 def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
                    use_convex: bool = False, n_clusters: int = 10, cluster_std: float = 0.5,
                    use_poincare: bool = True, use_spherical: bool = True, use_elliptic: bool = False) -> dict:
+    """
+    Run comprehensive dimensionality reduction experiment with multiple methods.
+    
+    This function generates synthetic data and applies various dimensionality reduction
+    techniques, evaluating their performance using multiple metrics.
+    
+    Parameters:
+    -----------
+    n : int
+        Number of data points to generate
+    d : int
+        Original dimensionality of the data
+    epsilon : float
+        Target distortion level for Johnson-Lindenstrauss dimension calculation
+    seed : int
+        Random seed for reproducibility
+    sample_size : int
+        Number of pairs to sample for distortion computation
+    use_convex : bool, optional
+        Whether to include convex hull projection method (default: False)
+    n_clusters : int, optional
+        Number of clusters for mixture of Gaussians data generation (default: 10)
+    cluster_std : float, optional
+        Standard deviation of clusters in mixture of Gaussians (default: 0.5)
+    use_poincare : bool, optional
+        Whether to include Poincaré embedding (default: True)
+    use_spherical : bool, optional
+        Whether to include spherical embedding (default: True)
+    use_elliptic : bool, optional
+        Whether to include elliptic embedding (default: False)
+    
+    Returns:
+    --------
+    dict
+        Dictionary mapping method names to their evaluation metrics.
+        Each method's metrics include:
+        - mean_distortion: Average pairwise distance distortion
+        - max_distortion: Maximum pairwise distance distortion  
+        - rank_correlation: Spearman correlation of pairwise distances
+        - kl_divergence: KL divergence between original and projected distributions
+        - l1_distance: L1 distance between distributions
+        - runtime: Execution time in seconds
+    """
     logger.info(f"Parameters: n={n}, d={d}, epsilon={epsilon}, seed={seed}, sample_size={sample_size}, "
                 f"use_convex={use_convex}, n_clusters={n_clusters}, cluster_std={cluster_std}")
 
