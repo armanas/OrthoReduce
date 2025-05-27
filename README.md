@@ -177,6 +177,42 @@ from orthogonal_projection import (
 - **`orthogonal_projection.pipeline`**: Simplified interface for common workflows
 - **`orthogonal_projection.evaluation`**: Evaluation metrics and quality assessment tools
 
+## Visualization Web App
+
+OrthoReduce includes a web-based visualization tool built with Streamlit that allows you to interactively explore and compare different dimensionality reduction methods.
+
+### Running with Docker
+
+The visualization web app can be run using Docker:
+
+```bash
+# Build and start the container
+docker-compose up -d
+
+# Or build and run directly with Docker
+docker build -t orthoreduce-viz .
+docker run -p 8501:8501 orthoreduce-viz
+```
+
+Then access the visualization app at http://localhost:8501 in your web browser.
+
+### Features of the Visualization App
+
+- Interactive parameter selection for experiments
+- Visualization of results with comparison charts
+- Metric analysis across different methods
+- Performance comparison using various metrics
+- Radar charts for overall method evaluation
+
+### Running Without Docker
+
+You can also run the visualization app directly:
+
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
 ## License
 
 This project is licensed under the terms of the LICENSE file included in the repository.
