@@ -5,3 +5,4 @@ matplotlib
 transformers
 torch
 sentence-transformers
+umap-learn
