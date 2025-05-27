@@ -1,14 +1,14 @@
 # OrthoReduce: Dimensionality Reduction with Orthogonal Projections
 
-OrthoReduce is a Python library for dimensionality reduction using orthogonal projections and geometric embeddings. It provides implementations of various dimensionality reduction techniques, including:
+OrthoReduce is a Python library for dimensionality reduction using orthogonal projections and geometric embeddings. It provides implementations of various dimensionality reduction techniques with a focus on preserving pairwise distances and geometric structure, emphasizing numerical stability.
 
-- Johnson-Lindenstrauss (JLL) random projections
-- Principal Component Analysis (PCA)
-- Poincaré (hyperbolic) embeddings
-- Spherical embeddings
-- UMAP (optional)
+## Features
 
-The library focuses on preserving pairwise distances and geometric structure during dimensionality reduction, with a particular emphasis on numerical stability.
+- **Multiple reduction methods**: Johnson-Lindenstrauss (JLL), PCA, UMAP, Poincaré, Spherical embeddings
+- **Enhanced methods**: Convex hull projections, mixture of Gaussians data generation
+- **Comprehensive evaluation**: Distortion metrics, rank correlation, nearest neighbor preservation, KL divergence
+- **Numerical stability**: Robust error handling and fallback mechanisms
+- **Flexible interfaces**: Simple pipeline API and full-featured experiment framework
 
 ## Installation
 
@@ -131,6 +131,51 @@ The library provides several metrics to evaluate the quality of dimensionality r
 - **Rank Correlation**: Spearman correlation between original and reduced pairwise distances
 - **Nearest Neighbor Overlap**: Measures how well nearest neighbors are preserved
 - **KL Divergence**: Measures the difference between softmax distributions in original and reduced spaces
+
+## API Reference
+
+### Quick Start Interface
+
+For simple usage, import from the main package:
+
+```python
+from orthogonal_projection import (
+    # Main experiment function (simplified interface)
+    run_experiment,
+    # Individual methods (simplified)
+    run_jll, run_poincare_pipeline, run_spherical_pipeline,
+    # Core projection utilities
+    generate_orthogonal_basis, project_data, jll_dimension,
+    # Evaluation metrics
+    compute_distortion, nearest_neighbor_overlap
+)
+```
+
+### Full Feature Interface
+
+For advanced usage and all features:
+
+```python
+from orthogonal_projection import (
+    # Main experiment with all options
+    run_full_experiment,
+    # Individual methods with full configuration
+    run_pca, run_jll_full, run_umap, run_poincare, run_spherical, run_convex,
+    # Data generation
+    generate_mixture_gaussians,
+    # Advanced evaluation
+    evaluate_rank_correlation, distribution_stats,
+    # Geometric embedding classes
+    HyperbolicEmbedding, SphericalEmbedding
+)
+```
+
+### Core Modules
+
+- **`orthogonal_projection.projection`**: Basic JLL projection and orthogonal basis generation
+- **`orthogonal_projection.dimensionality_reduction`**: All reduction methods and main experiment framework
+- **`orthogonal_projection.pipeline`**: Simplified interface for common workflows
+- **`orthogonal_projection.evaluation`**: Evaluation metrics and quality assessment tools
 
 ## License
 

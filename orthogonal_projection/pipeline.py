@@ -1,3 +1,18 @@
+"""
+pipeline.py - Simplified Interface for Dimensionality Reduction
+
+This module provides a simplified interface to the OrthoReduce library functionality.
+For advanced features and configuration options, use the full interface in 
+dimensionality_reduction.py.
+
+This module is maintained for backward compatibility and provides:
+- Simplified geometric embedding pipelines
+- Basic JLL projection
+- Wrapper for the main experiment function with default parameters
+
+For production use or research requiring fine-grained control, prefer importing
+from dimensionality_reduction directly.
+"""
 import numpy as np
 from .projection import jll_dimension, generate_orthogonal_basis, project_data
 from .dimensionality_reduction import (

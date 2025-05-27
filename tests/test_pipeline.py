@@ -27,5 +27,5 @@ def test_geometric_pipelines_shape():
 
 def test_run_experiment_small():
     results = run_experiment(n=100, d=20, epsilon=0.5, seed=0)
-    assert set(results.keys()) == {"PCA", "JLL", "Poincare", "Spherical"}
+    assert set(results.keys()) == {"PCA", "JLL", "UMAP", "Poincare", "Spherical"}
 
