@@ -1,0 +1,53 @@
+OrthoReduce Experiment Summary
+========================================
+
+Dataset: 500 points, 50 dimensions
+Target dimension: 42
+Compression ratio: 1.19x
+Epsilon: 0.2
+Intrinsic dimension: 35
+
+Method Results:
+--------------------
+
+JLL:
+  Mean distortion: 0.1434
+  Max distortion: 0.5186
+  Rank correlation: 0.9255
+  Runtime: 0.0032s
+  Compression ratio: 1.19x
+
+PCA:
+  Mean distortion: 0.0299
+  Max distortion: 0.4233
+  Rank correlation: 0.9983
+  Runtime: 0.0010s
+  Compression ratio: 1.19x
+
+GAUSSIAN:
+  Mean distortion: 0.8577
+  Max distortion: 2.2106
+  Rank correlation: 0.9043
+  Runtime: 0.0010s
+  Compression ratio: 1.19x
+
+POCS:
+  Mean distortion: 0.2535
+  Max distortion: 2.0226
+  Rank correlation: 0.6450
+  Runtime: 0.0028s
+  Compression ratio: 1.19x
+
+POINCARE:
+  Mean distortion: 0.1394
+  Max distortion: 0.8781
+  Rank correlation: 0.8311
+  Runtime: 0.0002s
+  Compression ratio: 1.19x
+
+SPHERICAL:
+  Mean distortion: 0.1385
+  Max distortion: 1.0135
+  Rank correlation: 0.8317
+  Runtime: 0.0002s
+  Compression ratio: 1.19x

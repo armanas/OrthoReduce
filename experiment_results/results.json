@@ -1,0 +1,59 @@
+{
+  "JLL": {
+    "mean_distortion": 0.14335603620499437,
+    "max_distortion": 0.518629861809625,
+    "rank_correlation": 0.9254752392577072,
+    "runtime": 0.003228902816772461,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "PCA": {
+    "mean_distortion": 0.029915222278880108,
+    "max_distortion": 0.4232844284747376,
+    "rank_correlation": 0.9982914400490205,
+    "runtime": 0.0009708404541015625,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "GAUSSIAN": {
+    "mean_distortion": 0.8576712421051012,
+    "max_distortion": 2.210619315056869,
+    "rank_correlation": 0.9042717080143403,
+    "runtime": 0.000982046127319336,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "POCS": {
+    "mean_distortion": 0.25347261519787334,
+    "max_distortion": 2.022623028691739,
+    "rank_correlation": 0.6450289535406056,
+    "runtime": 0.0027687549591064453,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "POINCARE": {
+    "mean_distortion": 0.13943978161412998,
+    "max_distortion": 0.8780911754116285,
+    "rank_correlation": 0.8311355477239242,
+    "runtime": 0.0002410411834716797,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "SPHERICAL": {
+    "mean_distortion": 0.13848420920600368,
+    "max_distortion": 1.0134994713169518,
+    "rank_correlation": 0.8316557210837914,
+    "runtime": 0.00016307830810546875,
+    "compression_ratio": 1.1904761904761905,
+    "optimized_evaluation": true
+  },
+  "_metadata": {
+    "n": 500,
+    "d": 50,
+    "k": 42,
+    "epsilon": 0.2,
+    "intrinsic_dimension": 35,
+    "adaptive_used": true,
+    "optimized_eval_available": true
+  }
+}

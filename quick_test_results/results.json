@@ -1,0 +1,27 @@
+{
+  "JLL": {
+    "mean_distortion": 2.4823881449101366e-16,
+    "max_distortion": 5.5649347296728596e-15,
+    "rank_correlation": 0.9999999999999999,
+    "runtime": 0.00015211105346679688,
+    "compression_ratio": 1.0,
+    "optimized_evaluation": true
+  },
+  "PCA": {
+    "mean_distortion": 6.964799778356268e-16,
+    "max_distortion": 8.293305139474229e-15,
+    "rank_correlation": 0.9999999999999999,
+    "runtime": 0.00037097930908203125,
+    "compression_ratio": 1.0,
+    "optimized_evaluation": true
+  },
+  "_metadata": {
+    "n": 200,
+    "d": 30,
+    "k": 30,
+    "epsilon": 0.2,
+    "intrinsic_dimension": 21,
+    "adaptive_used": true,
+    "optimized_eval_available": true
+  }
+}

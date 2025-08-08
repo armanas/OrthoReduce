@@ -1,0 +1,25 @@
+OrthoReduce Experiment Summary
+========================================
+
+Dataset: 200 points, 30 dimensions
+Target dimension: 30
+Compression ratio: 1.00x
+Epsilon: 0.2
+Intrinsic dimension: 21
+
+Method Results:
+--------------------
+
+JLL:
+  Mean distortion: 0.0000
+  Max distortion: 0.0000
+  Rank correlation: 1.0000
+  Runtime: 0.0002s
+  Compression ratio: 1.00x
+
+PCA:
+  Mean distortion: 0.0000
+  Max distortion: 0.0000
+  Rank correlation: 1.0000
+  Runtime: 0.0004s
+  Compression ratio: 1.00x

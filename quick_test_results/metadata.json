@@ -1,0 +1,9 @@
+{
+  "n": 200,
+  "d": 30,
+  "k": 30,
+  "epsilon": 0.2,
+  "intrinsic_dimension": 21,
+  "adaptive_used": true,
+  "optimized_eval_available": true
+}

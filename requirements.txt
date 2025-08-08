@@ -2,4 +2,8 @@ numpy
 scipy
 scikit-learn
 matplotlib
+seaborn
 umap-learn
+pyteomics
+pandas
+jupyter

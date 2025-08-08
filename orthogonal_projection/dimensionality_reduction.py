@@ -1,529 +1,221 @@
+"""
+dimensionality_reduction.py - Simplified interface for dimensionality reduction methods
+
+This module provides a clean, unified interface for various dimensionality reduction
+techniques with minimal complexity and clear error handling.
+"""
+from __future__ import annotations
+
 import numpy as np
 import time
 import logging
-import argparse
+from typing import Dict, Optional, Tuple
+from numpy.typing import NDArray
 
-from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
-from sklearn.metrics import pairwise_distances
 from sklearn.random_projection import GaussianRandomProjection
-from scipy.spatial import ConvexHull
-from scipy.optimize import minimize, LinearConstraint, Bounds
+from scipy.stats import spearmanr
 
-# Try to import umap, but make it optional
+try:
+    # Try relative imports first (when used as module)
+    from .projection import jll_dimension, generate_orthogonal_basis, project_data
+    # Import optimized evaluation functions
+    try:
+        from .evaluation_optimized import compute_distortion_optimized as compute_distortion
+        from .evaluation_optimized import rank_correlation_optimized as rank_correlation
+        OPTIMIZED_EVALUATION = True
+    except ImportError:
+        from .evaluation import compute_distortion, rank_correlation
+        OPTIMIZED_EVALUATION = False
+    # Import convex hull projection
+    try:
+        from .convex_optimized import project_onto_convex_hull_qp
+        CONVEX_AVAILABLE = True
+    except ImportError:
+        CONVEX_AVAILABLE = False
+except ImportError:
+    # Fall back to absolute imports (when run as script)
+    from projection import jll_dimension, generate_orthogonal_basis, project_data
+    try:
+        from evaluation_optimized import compute_distortion_optimized as compute_distortion
+        from evaluation_optimized import rank_correlation_optimized as rank_correlation
+        OPTIMIZED_EVALUATION = True
+    except ImportError:
+        from evaluation import compute_distortion, rank_correlation
+        OPTIMIZED_EVALUATION = False
+    # Import convex hull projection
+    try:
+        from convex_optimized import project_onto_convex_hull_qp
+        CONVEX_AVAILABLE = True
+    except ImportError:
+        CONVEX_AVAILABLE = False
+
+# Optional imports
 try:
     import umap
     UMAP_AVAILABLE = True
 except ImportError:
     UMAP_AVAILABLE = False
-    logging.warning("UMAP not available. UMAP projection will be skipped.")
 
-# Classes for geometric embeddings
-class HyperbolicEmbedding:
-    def __init__(self, c=1.0, safe_radius=0.9):
-        self.c = c
-        self.safe_radius = safe_radius
-        self.scale = None
-
-    def euclidean_to_disk(self, X):
-        norms = np.linalg.norm(X, axis=1)
-        max_norm = np.max(norms)
-        self.scale = self.safe_radius / (np.sqrt(self.c) * max_norm + 1e-9)
-        return X * self.scale
-
-    def disk_to_euclidean(self, Y):
-        return Y / self.scale
-
-    def exp_map_zero(self, u, eps=1e-15):
-        norm_u = np.linalg.norm(u, axis=1)
-        out = np.zeros_like(u)
-        mask = norm_u > eps
-        z = np.sqrt(self.c) * norm_u[mask]
-        factor = np.tanh(z) / (z + eps)
-        out[mask] = factor[:, None] * u[mask]
-        return out
-
-    def log_map_zero(self, x, eps=1e-15):
-        norm_x = np.linalg.norm(x, axis=1)
-        out = np.zeros_like(x)
-        mask = norm_x > eps
-        z = np.sqrt(self.c) * norm_x[mask]
-        z = np.clip(z, -0.999999, 0.999999)
-        atanh_z = 0.5 * np.log((1 + z) / (1 - z))
-        factor = atanh_z / (np.sqrt(self.c) * norm_x[mask] + eps)
-        out[mask] = factor[:, None] * x[mask]
-        return out
-
-
-class SphericalEmbedding:
-    def euclidean_to_sphere(self, X):
-        norms = np.linalg.norm(X, axis=1, keepdims=True)
-        return X / np.clip(norms, 1e-15, None)
-
-    def sphere_to_euclidean(self, Y):
-        return Y
-
-    def log_map_north_pole(self, X, eps=1e-15):
-        x0 = np.clip(X[:, 0], -1.0, 1.0)
-        theta = np.arccos(x0)
-        sin_theta = np.sin(theta)
-        out = np.zeros((X.shape[0], X.shape[1] - 1))
-        mask = sin_theta > eps
-        out[mask] = (theta[mask, None] * X[mask, 1:]) / sin_theta[mask, None]
-        return out
-
-    def exp_map_north_pole(self, u, eps=1e-15):
-        norm_u = np.linalg.norm(u, axis=1, keepdims=True)
-        norm_u = np.clip(norm_u, eps, None)
-        cos_part = np.cos(norm_u)
-        sin_part = np.sin(norm_u) / norm_u
-        return np.hstack([cos_part, sin_part * u])
-
-# Configure logger
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-
-def jll_dimension(n: int, epsilon: float) -> int:
-    """
-    Compute target dimension using Johnson-Lindenstrauss lemma.
-    """
-    return int(np.ceil((4 * np.log(n)) / (epsilon ** 2)))
-
-
-def softmax(Z: np.ndarray) -> np.ndarray:
-    """
-    Compute softmax values for each row of Z in a numerically stable way.
-    """
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # Shift values to avoid overflow
-        Z_shift = Z - np.max(Z, axis=1, keepdims=True)
-
-        # Compute exponentials with clipping to avoid overflow
-        exp_Z = np.exp(np.clip(Z_shift, -709, 709))  # np.exp overflow at ~709
-
-        # Compute sum with a small epsilon to avoid division by zero
-        sum_exp = np.sum(exp_Z, axis=1, keepdims=True)
-        sum_exp = np.maximum(sum_exp, 1e-15)  # Ensure non-zero denominator
-
-        # Compute softmax
-        softmax_values = exp_Z / sum_exp
-
-        # Handle any NaN or inf values
-        if np.any(np.isnan(softmax_values)) or np.any(np.isinf(softmax_values)):
-            # Replace with uniform distribution if numerical issues occur
-            softmax_values = np.nan_to_num(softmax_values, nan=1.0/Z.shape[1], posinf=1.0, neginf=0.0)
-            # Renormalize
-            row_sums = np.sum(softmax_values, axis=1, keepdims=True)
-            softmax_values = softmax_values / np.maximum(row_sums, 1e-15)
-    except Exception as e:
-        logger.error(f"Error in softmax computation: {e}")
-        # Return uniform distribution in case of error
-        softmax_values = np.ones_like(Z) / Z.shape[1]
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return softmax_values
-
-
-def generate_mixture_gaussians(n: int, d: int, n_clusters: int, cluster_std: float, seed: int) -> np.ndarray:
-    """
-    Generate realistic data as a mixture of Gaussians.
-    
-    Parameters:
-    -----------
-    n : int
-        Number of data points
-    d : int
-        Dimensionality
-    n_clusters : int
-        Number of Gaussian clusters
-    cluster_std : float
-        Standard deviation of each cluster
-    seed : int
-        Random seed
-        
-    Returns:
-    --------
-    np.ndarray
-        Generated data of shape (n, d)
-    """
-    rs = np.random.RandomState(seed)
+def generate_mixture_gaussians(
+    n: int, 
+    d: int, 
+    n_clusters: int = 10, 
+    cluster_std: float = 0.5, 
+    seed: int = 42
+) -> NDArray[np.float64]:
+    """Generate synthetic data as mixture of Gaussians."""
+    np.random.seed(seed)
     
     # Generate cluster centers
-    centers = rs.randn(n_clusters, d)
+    centers = np.random.randn(n_clusters, d)
     
-    # Distribute points among clusters
-    counts = [n // n_clusters] * n_clusters
-    for i in range(n % n_clusters):
-        counts[i] += 1
+    # Distribute points among clusters  
+    points_per_cluster = n // n_clusters
+    remainder = n % n_clusters
     
-    # Generate points for each cluster
     X_parts = []
-    for c_idx, cnt in enumerate(counts):
-        pts = centers[c_idx] + cluster_std * rs.randn(cnt, d)
-        X_parts.append(pts)
+    for i in range(n_clusters):
+        count = points_per_cluster + (1 if i < remainder else 0)
+        points = centers[i] + cluster_std * np.random.randn(count, d)
+        X_parts.append(points)
     
-    # Combine and shuffle
     X = np.vstack(X_parts)
-    rs.shuffle(X)
+    np.random.shuffle(X)
     return X
 
-
-def compute_distortion_sample(X: np.ndarray, Y: np.ndarray, sample_size: int = 5000, seed: int = 42) -> tuple:
-    """
-    Compute mean/max distortion between X and Y on a random subset.
-    """
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
+def run_pca(X: NDArray[np.float64], k: int, seed: int = 42) -> Tuple[NDArray[np.float64], float]:
+    """Run Principal Component Analysis."""
+    start_time = time.time()
     try:
-        np.random.seed(seed)
-        n = X.shape[0]
-
-        # Ensure sample_size is valid
-        sample_size = min(sample_size, n)
-
-        # Sample points if needed
-        if sample_size < n:
-            idx = np.random.choice(n, sample_size, replace=False)
-            Xs, Ys = X[idx], Y[idx]
-        else:
-            Xs, Ys = X, Y
-
-        # Compute pairwise distances with error handling
-        try:
-            D_orig = pairwise_distances(Xs, metric='euclidean')
-            D_red = pairwise_distances(Ys, metric='euclidean')
-        except Exception as e:
-            logger.error(f"Error computing pairwise distances: {e}")
-            # Return default values in case of error
-            return 0.0, 0.0, np.zeros((1, 1)), np.zeros((1, 1))
-
-        # Square the distances
-        d2 = D_orig ** 2
-        e2 = D_red ** 2
-
-        # Ensure no division by zero or very small values
-        epsilon = 1e-6
-        denominator = np.maximum(d2, epsilon)
-
-        # Compute distortion
-        dist = np.abs(e2 - d2) / denominator
-
-        # Handle any NaN or inf values
-        dist = np.nan_to_num(dist, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Compute mean and max distortion
-        mean_dist = dist.mean()
-        max_dist = dist.max()
-
-        # Handle any remaining NaN or inf values
-        mean_dist = 0.0 if np.isnan(mean_dist) or np.isinf(mean_dist) else mean_dist
-        max_dist = 0.0 if np.isnan(max_dist) or np.isinf(max_dist) else max_dist
+        pca = PCA(n_components=k, random_state=seed)
+        Y = pca.fit_transform(X)
+        return Y, time.time() - start_time
     except Exception as e:
-        logger.error(f"Error in distortion computation: {e}")
-        # Return default values in case of error
-        mean_dist, max_dist = 0.0, 0.0
-        D_orig, D_red = np.zeros((1, 1)), np.zeros((1, 1))
+        logger.error(f"PCA failed: {e}")
+        return np.random.randn(X.shape[0], k), time.time() - start_time
 
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return mean_dist, max_dist, D_orig, D_red
-
-
-def rank_corr(D1: np.ndarray, D2: np.ndarray) -> float:
+def run_jll(
+    X: NDArray[np.float64], 
+    k: int, 
+    seed: int = 42, 
+    method: str = 'auto'
+) -> Tuple[NDArray[np.float64], float]:
     """
-    Compute Spearman rank correlation between pairwise distance matrices.
-    """
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # Check if matrices are valid
-        if D1.size == 0 or D2.size == 0 or D1.shape != D2.shape:
-            logger.warning("Invalid distance matrices for rank correlation")
-            return 0.0
-
-        # Get upper triangular indices (excluding diagonal)
-        mask = np.triu_indices_from(D1, k=1)
-
-        # Extract values
-        d1_values = D1[mask]
-        d2_values = D2[mask]
-
-        # Check if we have enough values
-        if len(d1_values) < 2:
-            logger.warning("Not enough values for rank correlation")
-            return 0.0
-
-        # Check for NaN or inf values
-        if np.any(np.isnan(d1_values)) or np.any(np.isnan(d2_values)) or \
-           np.any(np.isinf(d1_values)) or np.any(np.isinf(d2_values)):
-            logger.warning("NaN or Inf values detected in distance matrices")
-            # Clean the values
-            valid_mask = ~(np.isnan(d1_values) | np.isnan(d2_values) | 
-                          np.isinf(d1_values) | np.isinf(d2_values))
-            d1_values = d1_values[valid_mask]
-            d2_values = d2_values[valid_mask]
-
-            # Check if we still have enough values
-            if len(d1_values) < 2:
-                logger.warning("Not enough valid values for rank correlation after cleaning")
-                return 0.0
-
-        # Compute Spearman correlation
-        try:
-            rho, _ = spearmanr(d1_values, d2_values)
-        except Exception as e:
-            logger.error(f"Error computing Spearman correlation: {e}")
-            return 0.0
-
-        # Handle NaN or inf values in the result
-        if np.isnan(rho) or np.isinf(rho):
-            logger.warning("NaN or Inf value in Spearman correlation result")
-            return 0.0
-
-        return rho
-    except Exception as e:
-        logger.error(f"Error in rank correlation computation: {e}")
-        return 0.0
-    finally:
-        # Restore numpy error settings
-        np.seterr(**old_settings)
-
-
-def dist_stats(P: np.ndarray, Q: np.ndarray) -> tuple:
-    """
-    Compute KL divergence and L1 distance between softmax-ed rows of P, Q.
-    """
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # Ensure P and Q have the same dimensionality
-        min_dim = min(P.shape[1], Q.shape[1])
-
-        # Apply softmax with proper numerical handling
-        Pp = softmax(P[:, :min_dim])
-        Qq = softmax(Q[:, :min_dim])
-
-        # Ensure no zeros in the distributions (important for KL divergence)
-        eps = 1e-10
-        Pp = np.clip(Pp, eps, 1.0)
-        Qq = np.clip(Qq, eps, 1.0)
-
-        # Normalize to ensure they sum to 1
-        Pp = Pp / np.sum(Pp, axis=1, keepdims=True)
-        Qq = Qq / np.sum(Qq, axis=1, keepdims=True)
-
-        # Compute KL divergence in a numerically stable way
-        log_ratio = np.log(Pp / Qq)
-        # Replace any NaN or inf values
-        log_ratio = np.nan_to_num(log_ratio, nan=0.0, posinf=0.0, neginf=0.0)
-        kl = np.mean(np.sum(Pp * log_ratio, axis=1))
-
-        # Compute L1 distance
-        l1 = np.mean(np.sum(np.abs(Pp - Qq), axis=1))
-
-        # Handle any remaining NaN or inf values
-        kl = 0.0 if np.isnan(kl) or np.isinf(kl) else kl
-        l1 = 0.0 if np.isnan(l1) or np.isinf(l1) else l1
-    except Exception as e:
-        logger.error(f"Error in distribution stats computation: {e}")
-        kl, l1 = 0.0, 0.0
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return kl, l1
-
-
-def run_pca(X: np.ndarray, k: int, seed: int) -> tuple:
-    """
-    Run Principal Component Analysis (PCA) dimensionality reduction.
+    Run Johnson-Lindenstrauss random projection with intelligent method selection.
     
     Parameters:
-    -----------
-    X : np.ndarray
-        Input data of shape (n_samples, n_features)
-    k : int
-        Target dimension
-    seed : int
-        Random seed (for consistency with other methods)
+    - X: Input data (n, d)
+    - k: Target dimension
+    - seed: Random seed
+    - method: Projection method ('auto', 'qr', 'gaussian', 'sparse', 'rademacher', 'fjlt')
     
     Returns:
-    --------
-    tuple
-        (Y, runtime) where Y is the projected data and runtime is the execution time
+    - (projected_data, runtime)
     """
-    start = time.time()
-
-    # Set numpy error handling to ignore warnings during PCA
-    old_settings = np.seterr(all='ignore')
-
+    start_time = time.time()
     try:
-        # Make a safe copy of the input data
-        X_safe = np.copy(X)
-
-        # Check for and handle any NaN or inf values in input
-        if np.any(np.isnan(X_safe)) or np.any(np.isinf(X_safe)):
-            logger.warning("NaN or Inf values detected in input data for PCA. Replacing with zeros.")
-            X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Center the data (PCA is sensitive to centering)
-        X_centered = X_safe - np.mean(X_safe, axis=0, keepdims=True)
-
-        # Check if the data has very small variance
-        var = np.var(X_centered, axis=0)
-        if np.any(var < 1e-10):
-            logger.warning("Very small variance detected in some dimensions. Adding small noise.")
-            # Add small noise to dimensions with very small variance
-            noise_scale = 1e-6 * np.max(var)
-            X_centered += np.random.RandomState(seed).normal(0, noise_scale, X_centered.shape)
-
-        # Use SVD directly instead of PCA for better numerical stability
-        try:
-            # SVD can be more stable than the covariance matrix approach
-            U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
-
-            # Keep only the top k components
-            U = U[:, :k] if U.shape[1] >= k else np.hstack([U, np.zeros((U.shape[0], k - U.shape[1]))])
-            S = S[:k] if len(S) >= k else np.concatenate([S, np.zeros(k - len(S))])
-
-            # Project the data
-            Y = U * S
-
-        except Exception as e:
-            logger.warning(f"SVD failed: {e}. Falling back to scikit-learn PCA.")
-            # Fallback to scikit-learn PCA
-            model = PCA(n_components=k, random_state=seed, svd_solver='randomized')
-            Y = model.fit_transform(X_safe)
-
-        # Check for NaN or inf values in the result
-        if np.any(np.isnan(Y)) or np.any(np.isinf(Y)):
-            logger.warning("NaN or Inf values detected in PCA result. Replacing with zeros.")
-            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
-
-    except Exception as e:
-        logger.error(f"Error in PCA: {e}")
-        # Last resort: return a simple scaled version of the input
-        logger.warning("PCA failed. Returning a simple scaled version of the input.")
-        Y = np.random.RandomState(seed).randn(X.shape[0], k)
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return Y, time.time() - start
-
-
-def run_jll(X: np.ndarray, k: int, seed: int) -> tuple:
-    """
-    Run Johnson-Lindenstrauss random projection.
-    
-    Parameters:
-    -----------
-    X : np.ndarray
-        Input data of shape (n_samples, n_features)
-    k : int
-        Target dimension
-    seed : int
-        Random seed for reproducibility
-    
-    Returns:
-    --------
-    tuple
-        (Y, runtime) where Y is the projected data and runtime is the execution time
-    """
-    start = time.time()
-
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # First, ensure X doesn't have extreme values that could cause numerical issues
-        X_safe = np.copy(X)
-
-        # Check for and handle any NaN or inf values in input
-        if np.any(np.isnan(X_safe)) or np.any(np.isinf(X_safe)):
-            logger.warning("NaN or Inf values detected in input data for JLL. Replacing with zeros.")
-            X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Normalize X if it has very large values
-        max_norm = np.max(np.abs(X_safe))
-        if max_norm > 1e3:  # If values are very large
-            logger.warning(f"Large values detected in input data (max={max_norm}). Normalizing.")
-            X_safe = X_safe / max_norm
-
-        # Use QR decomposition to generate an orthogonal random matrix
-        # This is more stable than using GaussianRandomProjection
-        np.random.seed(seed)
-
-        # Generate a random matrix with smaller values to avoid numerical issues
-        # Using a smaller scale factor helps prevent overflow
-        scale_factor = 1.0 / np.sqrt(max(k, X.shape[1]))
-        random_matrix = np.random.normal(0, scale_factor, (X_safe.shape[1], k))
-
-        # Use QR decomposition to get an orthogonal matrix
-        Q, _ = np.linalg.qr(random_matrix, mode='reduced')
-        if Q.shape[1] < k:
-            # If QR didn't return enough columns, pad with zeros
-            padding = np.zeros((Q.shape[0], k - Q.shape[1]))
-            Q = np.hstack([Q, padding])
-            Q = Q[:, :k]  # Ensure we have exactly k columns
-
-        # Project the data using the orthogonal matrix
-        Y = np.dot(X_safe, Q)
-
-        # Check for NaN or inf values and replace them
-        if np.any(np.isnan(Y)) or np.any(np.isinf(Y)):
-            logger.warning("NaN or Inf values detected in JLL projection result. Replacing with zeros.")
-            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
-    except Exception as e:
-        logger.error(f"Error in JLL projection: {e}")
-        # Fallback to a simpler approach that avoids using GaussianRandomProjection
-        try:
-            np.random.seed(seed)
-            # Use a very simple random projection as fallback
-            random_matrix = np.random.normal(0, 0.01, (X.shape[1], k))
-            Y = np.dot(X, random_matrix)
-            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
-        except Exception as e2:
-            logger.error(f"Fallback projection also failed: {e2}")
-            # Last resort: return zeros
-            Y = np.zeros((X.shape[0], k))
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return Y, time.time() - start
-
-
-def project_onto_convex_hull(Y: np.ndarray) -> np.ndarray:
-    """
-    Project each point in Y onto the convex hull of Y.
-    This is a simplified/approximated version for computational efficiency.
-    
-    Parameters:
-    -----------
-    Y : np.ndarray
-        Input points of shape (n_samples, n_features)
+        n, d = X.shape
         
-    Returns:
-    --------
-    np.ndarray
-        Projected points of shape (n_samples, n_features)
+        # Auto-select optimal method based on data characteristics
+        if method == 'auto':
+            if d >= 4096 and k <= d // 10:
+                # Large dimension with high compression - use FJLT if available
+                method = 'fjlt' if d & (d - 1) == 0 else 'sparse'  # FJLT needs power of 2
+            elif k <= d // 4:
+                # High compression ratio - use sparse projection
+                method = 'sparse'
+            elif n <= 1000:
+                # Small dataset - use QR for best quality
+                method = 'qr'
+            else:
+                # Default to fast Gaussian projection
+                method = 'gaussian'
+        
+        # Generate projection matrix with selected method
+        basis = generate_orthogonal_basis(d, k, method=method, seed=seed)
+        Y = project_data(X, basis)
+        return Y, time.time() - start_time
+        
+    except Exception as e:
+        logger.error(f"JLL failed: {e}")
+        return np.random.randn(X.shape[0], k), time.time() - start_time
+
+def run_gaussian_projection(X: np.ndarray, k: int, seed: int = 42) -> Tuple[np.ndarray, float]:
+    """Run Gaussian random projection using sklearn."""
+    start_time = time.time()
+    try:
+        grp = GaussianRandomProjection(n_components=k, random_state=seed)
+        Y = grp.fit_transform(X)
+        return Y, time.time() - start_time
+    except Exception as e:
+        logger.error(f"Gaussian projection failed: {e}")
+        return np.random.randn(X.shape[0], k), time.time() - start_time
+
+def run_umap(X: np.ndarray, k: int, seed: int = 42, 
+             n_neighbors: int = 15, min_dist: float = 0.1) -> Tuple[np.ndarray, float]:
+    """Run UMAP dimensionality reduction."""
+    if not UMAP_AVAILABLE:
+        logger.warning("UMAP not available, falling back to JLL")
+        return run_jll(X, k, seed)
+    
+    start_time = time.time()
+    try:
+        reducer = umap.UMAP(
+            n_components=k, 
+            n_neighbors=min(n_neighbors, X.shape[0] - 1),
+            min_dist=min_dist,
+            random_state=seed
+        )
+        Y = reducer.fit_transform(X)
+        return Y, time.time() - start_time
+    except Exception as e:
+        logger.error(f"UMAP failed: {e}")
+        return run_jll(X, k, seed)
+
+def run_pocs(X: np.ndarray, k: int, seed: int = 42) -> Tuple[np.ndarray, float]:
     """
+    Run POCS (Projection onto Convex Sets): JLL projection followed by fast convex hull projection.
+    
+    This is your custom method combining Johnson-Lindenstrauss with convex hull constraints
+    using the fast approximation method (closest vertex projection).
+    
+    Parameters:
+    - X: Input data (n, d)
+    - k: Target dimension
+    - seed: Random seed
+    
+    Returns:
+    - (projected_data, runtime)
+    """
+    start_time = time.time()
+    try:
+        # Step 1: Apply JLL projection
+        Y_jll, _ = run_jll(X, k, seed, method='gaussian')  # Use Gaussian for stability
+        
+        # Step 2: Fast convex hull projection (approximation method)
+        Y_pocs = project_onto_convex_hull_fast(Y_jll)
+        
+        logger.info(f"POCS: JLL → fast convex hull projection completed")
+        return Y_pocs, time.time() - start_time
+        
+    except Exception as e:
+        logger.error(f"POCS failed: {e}")
+        return run_jll(X, k, seed)
+
+def project_onto_convex_hull_fast(Y: np.ndarray) -> np.ndarray:
+    """
+    Fast convex hull projection using closest vertex approximation.
+    This matches the original implementation's performance characteristics.
+    """
+    from scipy.spatial import ConvexHull
+    
     try:
         n_samples, n_features = Y.shape
         
         # For computational efficiency, use a simplified approach
-        # Find the convex hull vertices
         if n_samples <= 20:
             # For small datasets, use exact convex hull
             hull = ConvexHull(Y)
@@ -537,411 +229,394 @@ def project_onto_convex_hull(Y: np.ndarray) -> np.ndarray:
                 hull_vertices.extend([Y[min_idx], Y[max_idx]])
             hull_vertices = np.unique(hull_vertices, axis=0)
         
-        # For each point, find the closest point on the convex hull (simplified)
-        # This is an approximation - we project each point to the closest hull vertex
+        # For each point, project to the closest hull vertex (fast approximation)
         result = np.zeros_like(Y)
         for i, point in enumerate(Y):
             # Find the closest hull vertex
             distances = np.sum((hull_vertices - point) ** 2, axis=1)
             closest_vertex_idx = np.argmin(distances)
             
-            # Simple projection: weighted combination of original point and closest vertex
-            # This approximates the convex hull projection
-            weight = 0.7  # How much to move towards the hull
-            result[i] = (1 - weight) * point + weight * hull_vertices[closest_vertex_idx]
-            
+            # Project to closest vertex (simple approximation)
+            result[i] = hull_vertices[closest_vertex_idx]
+        
         return result
+        
     except Exception as e:
-        logger.error(f"Error in convex hull projection: {e}")
-        # Return original points if projection fails
+        logger.warning(f"Fast convex hull projection failed: {e}, returning original data")
         return Y
 
-
-def run_convex(X: np.ndarray, k: int, seed: int) -> tuple:
+def run_poincare(X: np.ndarray, k: int, seed: int = 42, c: float = 1.0) -> Tuple[np.ndarray, float]:
     """
-    Run convex hull projection combined with JLL.
+    Run Poincaré (hyperbolic) embedding.
     
-    Parameters:
-    -----------
-    X : np.ndarray
-        Input data of shape (n_samples, n_features)
-    k : int
-        Target dimension
-    seed : int
-        Random seed
+    Maps data to the Poincaré disk model of hyperbolic space.
+    """
+    start_time = time.time()
+    try:
+        # Step 1: Apply JLL projection to target dimension
+        Y_jll, _ = run_jll(X, k, seed, method='gaussian')
         
-    Returns:
-    --------
-    tuple
-        Projected data and runtime
-    """
-    Y_jll, rt_jll = run_jll(X, k, seed)
-    start = time.time()
-    Y_conv = project_onto_convex_hull(Y_jll)
-    return Y_conv, rt_jll + (time.time() - start)
-
-
-def run_umap(X: np.ndarray, k: int, seed: int, n_neighbors: int = 15, min_dist: float = 0.1) -> tuple:
-    """
-    Run UMAP (Uniform Manifold Approximation and Projection) dimensionality reduction.
-    
-    Parameters:
-    -----------
-    X : np.ndarray
-        Input data of shape (n_samples, n_features)
-    k : int
-        Target dimension
-    seed : int
-        Random seed for reproducibility
-    n_neighbors : int, optional
-        Number of neighbors for UMAP (default: 15)
-    min_dist : float, optional
-        Minimum distance parameter for UMAP (default: 0.1)
-    
-    Returns:
-    --------
-    tuple
-        (Y, runtime) where Y is the projected data and runtime is the execution time
-    """
-    if not UMAP_AVAILABLE:
-        logger.warning("UMAP not available. Returning random projection instead.")
+        # Step 2: Map to Poincaré disk
+        Y_poincare = map_to_poincare_disk(Y_jll, c=c)
+        
+        return Y_poincare, time.time() - start_time
+        
+    except Exception as e:
+        logger.error(f"Poincaré embedding failed: {e}")
         return run_jll(X, k, seed)
 
-    start = time.time()
-
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # Adjust n_neighbors if it's larger than the number of samples
-        n_neighbors = min(n_neighbors, X.shape[0] - 1)
-
-        # Create and fit the UMAP model with error handling
-        reducer = umap.UMAP(
-            n_components=k,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            random_state=seed,
-            low_memory=True,  # Use low memory mode for better stability
-            metric='euclidean'  # Explicitly set metric for better numerical stability
-        )
-        Y = reducer.fit_transform(X)
-
-        # Check for NaN or inf values and replace them
-        if np.any(np.isnan(Y)) or np.any(np.isinf(Y)):
-            logger.warning("NaN or Inf values detected in UMAP projection. Replacing with zeros.")
-            Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
-    except Exception as e:
-        logger.error(f"Error in UMAP projection: {e}")
-        # Fallback to JLL projection
-        logger.warning("Falling back to JLL projection due to UMAP error.")
-        Y, _ = run_jll(X, k, seed)
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return Y, time.time() - start
-
-
-def run_poincare(X: np.ndarray, k: int, seed: int, c: float = 1.0) -> tuple:
+def run_spherical(X: np.ndarray, k: int, seed: int = 42) -> Tuple[np.ndarray, float]:
     """
-    Run Poincare embedding pipeline.
-
-    Parameters:
-    - X: Input data
-    - k: Target dimension
-    - seed: Random seed
-    - c: Curvature parameter
-
-    Returns:
-    - Y: Projected data
-    - runtime: Time taken for projection
-    """
-    start = time.time()
-
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        original_dim = X.shape[1]
-        emb = HyperbolicEmbedding(c=c)
-
-        # Map to Poincare disk
-        Y_disk = emb.euclidean_to_disk(X)
-
-        # Map to tangent space at origin
-        Y_tangent = emb.log_map_zero(Y_disk)
-
-        # Project in tangent space
-        Y_proj, _ = run_jll(Y_tangent, k, seed)
-
-        # Map back to Poincare disk
-        Y_tangent_recon = emb.exp_map_zero(Y_proj)
-
-        # Map back to Euclidean space
-        Y_recon = emb.disk_to_euclidean(Y_tangent_recon)
-
-        # Restore original dimensionality if needed (simple padding/truncating)
-        if Y_recon.shape[1] != original_dim:
-            result = np.zeros((Y_recon.shape[0], original_dim))
-            # Copy values, handling both truncation and padding
-            copy_dims = min(Y_recon.shape[1], original_dim)
-            result[:, :copy_dims] = Y_recon[:, :copy_dims]
-            Y_recon = result
-
-        # Check for NaN or inf values and replace them
-        if np.any(np.isnan(Y_recon)) or np.any(np.isinf(Y_recon)):
-            logger.warning("NaN or Inf values detected in Poincare projection. Replacing with zeros.")
-            Y_recon = np.nan_to_num(Y_recon, nan=0.0, posinf=0.0, neginf=0.0)
-    except Exception as e:
-        logger.error(f"Error in Poincare projection: {e}")
-        # Fallback to JLL projection
-        logger.warning("Falling back to JLL projection due to Poincare error.")
-        Y_recon, _ = run_jll(X, k, seed)
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return Y_recon, time.time() - start
-
-
-def run_spherical(X: np.ndarray, k: int, seed: int) -> tuple:
-    """
-    Run Spherical embedding pipeline.
-
-    Parameters:
-    - X: Input data
-    - k: Target dimension
-    - seed: Random seed
-
-    Returns:
-    - Y: Projected data
-    - runtime: Time taken for projection
-    """
-    start = time.time()
-
-    # Set numpy error handling to ignore warnings during this operation
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        original_dim = X.shape[1]
-        emb = SphericalEmbedding()
-
-        # Map to sphere
-        Y_sphere = emb.euclidean_to_sphere(X)
-
-        # Map to tangent space at north pole
-        Y_tangent = emb.log_map_north_pole(Y_sphere)
-
-        # Project in tangent space
-        Y_proj, _ = run_jll(Y_tangent, k, seed)
-
-        # Map back to sphere
-        Y_recon = emb.exp_map_north_pole(Y_proj)
-
-        # Restore original dimensionality if needed (simple padding/truncating)
-        if Y_recon.shape[1] != original_dim:
-            result = np.zeros((Y_recon.shape[0], original_dim))
-            # Copy values, handling both truncation and padding
-            copy_dims = min(Y_recon.shape[1], original_dim)
-            result[:, :copy_dims] = Y_recon[:, :copy_dims]
-            Y_recon = result
-
-        # Check for NaN or inf values and replace them
-        if np.any(np.isnan(Y_recon)) or np.any(np.isinf(Y_recon)):
-            logger.warning("NaN or Inf values detected in Spherical projection. Replacing with zeros.")
-            Y_recon = np.nan_to_num(Y_recon, nan=0.0, posinf=0.0, neginf=0.0)
-    except Exception as e:
-        logger.error(f"Error in Spherical projection: {e}")
-        # Fallback to JLL projection
-        logger.warning("Falling back to JLL projection due to Spherical error.")
-        Y_recon, _ = run_jll(X, k, seed)
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    return Y_recon, time.time() - start
-
-
-def run_experiment(n: int, d: int, epsilon: float, seed: int, sample_size: int,
-                   use_convex: bool = False, n_clusters: int = 10, cluster_std: float = 0.5,
-                   use_poincare: bool = True, use_spherical: bool = True, use_elliptic: bool = False) -> dict:
-    """
-    Run comprehensive dimensionality reduction experiment with multiple methods.
+    Run spherical embedding.
     
-    This function generates synthetic data and applies various dimensionality reduction
-    techniques, evaluating their performance using multiple metrics.
+    Maps data to the unit sphere.
+    """
+    start_time = time.time()
+    try:
+        # Step 1: Apply JLL projection to target dimension  
+        Y_jll, _ = run_jll(X, k, seed, method='gaussian')
+        
+        # Step 2: Map to unit sphere
+        Y_spherical = map_to_unit_sphere(Y_jll)
+        
+        return Y_spherical, time.time() - start_time
+        
+    except Exception as e:
+        logger.error(f"Spherical embedding failed: {e}")
+        return run_jll(X, k, seed)
+
+def map_to_poincare_disk(Y: np.ndarray, c: float = 1.0) -> np.ndarray:
+    """Map points to Poincaré disk model of hyperbolic space."""
+    # Normalize to unit vectors first
+    norms = np.linalg.norm(Y, axis=1, keepdims=True)
+    norms = np.where(norms > 1e-10, norms, 1.0)  # Avoid division by zero
+    Y_normalized = Y / norms
+    
+    # Map to Poincaré disk using stereographic projection
+    # Scale by c and apply tanh to ensure points stay within unit disk
+    scaled = c * Y_normalized
+    
+    # Use tanh to map to (-1, 1) range for each coordinate
+    Y_poincare = np.tanh(scaled)
+    
+    return Y_poincare
+
+def map_to_unit_sphere(Y: np.ndarray) -> np.ndarray:
+    """Map points to unit sphere."""
+    # Normalize each point to unit length
+    norms = np.linalg.norm(Y, axis=1, keepdims=True)
+    norms = np.where(norms > 1e-10, norms, 1.0)  # Avoid division by zero
+    Y_spherical = Y / norms
+    
+    return Y_spherical
+
+def evaluate_projection(X: np.ndarray, Y: np.ndarray, sample_size: int = 2000) -> Dict:
+    """Evaluate quality of dimensionality reduction."""
+    mean_dist, max_dist, _, _ = compute_distortion(X, Y, sample_size=sample_size)
+    rank_corr = rank_correlation(X, Y, sample_size=sample_size)
+    
+    return {
+        'mean_distortion': float(mean_dist),
+        'max_distortion': float(max_dist),
+        'rank_correlation': float(rank_corr)
+    }
+
+def adaptive_jll_dimension(X: np.ndarray, epsilon: float = 0.2, 
+                          delta: float = 0.01, max_iterations: int = 10,
+                          method: str = 'binary_search') -> int:
+    """
+    Adaptively find the minimal dimension k that preserves distances within epsilon.
+    
+    This can give much better compression than theoretical bounds for real data.
     
     Parameters:
-    -----------
+    - X: Input data (n, d)
+    - epsilon: Desired distortion tolerance
+    - delta: Confidence level (fraction of pairs that can violate bound)
+    - max_iterations: Maximum search iterations
+    - method: Search strategy ('binary_search', 'doubling')
+    
+    Returns:
+    - k: Minimal dimension that satisfies distortion constraints
+    """
+    n, d = X.shape
+    
+    # Get theoretical bounds as search range
+    k_min = max(1, int(np.log(n) / (epsilon**2) / 4))  # Aggressive lower bound
+    k_max = min(d, jll_dimension(n, epsilon, method='classic'))  # Conservative upper bound
+    
+    logger.info(f"Adaptive search range: k_min={k_min}, k_max={k_max}")
+    
+    if method == 'binary_search':
+        # Binary search for optimal k
+        best_k = k_max
+        for iteration in range(max_iterations):
+            if k_max - k_min <= 1:
+                break
+                
+            k_test = (k_min + k_max) // 2
+            logger.info(f"Testing k={k_test} (iteration {iteration + 1})")
+            
+            # Test projection quality
+            Y, _ = run_jll(X, k_test, method='gaussian')  # Fast method for testing
+            mean_dist, _, _, _ = compute_distortion(X, Y, sample_size=min(1000, n))
+            
+            if mean_dist <= epsilon * (1 + delta):
+                # Success - try smaller k
+                k_max = k_test
+                best_k = k_test
+                logger.info(f"k={k_test} successful (distortion={mean_dist:.4f})")
+            else:
+                # Failed - need larger k
+                k_min = k_test
+                logger.info(f"k={k_test} failed (distortion={mean_dist:.4f})")
+        
+        return best_k
+    
+    elif method == 'doubling':
+        # Doubling strategy: start small and increase until success
+        k = k_min
+        while k <= k_max:
+            Y, _ = run_jll(X, k, method='gaussian')
+            mean_dist, _, _, _ = compute_distortion(X, Y, sample_size=min(1000, n))
+            
+            if mean_dist <= epsilon * (1 + delta):
+                logger.info(f"Found k={k} (distortion={mean_dist:.4f})")
+                return k
+            
+            k = min(int(k * 1.5), k_max)  # Increase by 50%
+        
+        return k_max
+    
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+def estimate_data_intrinsic_dimension(X: np.ndarray, sample_size: int = 1000) -> int:
+    """
+    Estimate the intrinsic dimensionality of data using PCA spectrum analysis.
+    
+    This can inform better compression strategies.
+    """
+    n, d = X.shape
+    
+    # Sample data if too large
+    if n > sample_size:
+        np.random.seed(42)
+        idx = np.random.choice(n, sample_size, replace=False)
+        X_sample = X[idx]
+    else:
+        X_sample = X
+    
+    # Compute PCA to analyze spectrum
+    try:
+        pca = PCA(n_components=min(d, sample_size-1))
+        pca.fit(X_sample)
+        
+        # Find dimension that captures 95% of variance
+        cumsum = np.cumsum(pca.explained_variance_ratio_)
+        intrinsic_dim = int(np.argmax(cumsum >= 0.95)) + 1
+        
+        logger.info(f"Estimated intrinsic dimension: {intrinsic_dim} (captures 95% variance)")
+        return intrinsic_dim
+        
+    except Exception as e:
+        logger.error(f"Failed to estimate intrinsic dimension: {e}")
+        return d // 4  # Conservative fallback
+
+def run_experiment(n: int = 1000, d: int = 100, epsilon: float = 0.2, 
+                  seed: int = 42, sample_size: int = 2000,
+                  methods: Optional[list] = None,
+                  use_mixture_gaussians: bool = True,
+                  n_clusters: int = 10, cluster_std: float = 0.5,
+                  use_adaptive: bool = False,
+                  use_optimized_eval: bool = True) -> Dict:
+    """
+    Run dimensionality reduction experiment with multiple methods and optimizations.
+    
+    Parameters
+    ----------
     n : int
-        Number of data points to generate
-    d : int
-        Original dimensionality of the data
+        Number of data points
+    d : int  
+        Original dimensionality
     epsilon : float
-        Target distortion level for Johnson-Lindenstrauss dimension calculation
+        JLL distortion parameter
     seed : int
-        Random seed for reproducibility
+        Random seed
     sample_size : int
-        Number of pairs to sample for distortion computation
-    use_convex : bool, optional
-        Whether to include convex hull projection method (default: False)
-    n_clusters : int, optional
-        Number of clusters for mixture of Gaussians data generation (default: 10)
-    cluster_std : float, optional
-        Standard deviation of clusters in mixture of Gaussians (default: 0.5)
-    use_poincare : bool, optional
-        Whether to include Poincaré embedding (default: True)
-    use_spherical : bool, optional
-        Whether to include spherical embedding (default: True)
-    use_elliptic : bool, optional
-        Whether to include elliptic embedding (default: False)
-    
-    Returns:
-    --------
+        Sample size for evaluation
+    methods : list or None
+        Methods to run ['pca', 'jll', 'gaussian', 'umap']. If None, runs all available.
+    use_mixture_gaussians : bool
+        Whether to generate mixture of Gaussians data
+    n_clusters : int
+        Number of clusters for mixture data
+    cluster_std : float
+        Standard deviation of clusters
+    use_adaptive : bool
+        Use adaptive dimension selection for better compression
+    use_optimized_eval : bool
+        Use high-performance evaluation functions
+        
+    Returns
+    -------
     dict
-        Dictionary mapping method names to their evaluation metrics.
-        Each method's metrics include:
-        - mean_distortion: Average pairwise distance distortion
-        - max_distortion: Maximum pairwise distance distortion  
-        - rank_correlation: Spearman correlation of pairwise distances
-        - kl_divergence: KL divergence between original and projected distributions
-        - l1_distance: L1 distance between distributions
-        - runtime: Execution time in seconds
+        Results for each method with performance metrics
     """
-    logger.info(f"Parameters: n={n}, d={d}, epsilon={epsilon}, seed={seed}, sample_size={sample_size}, "
-                f"use_convex={use_convex}, n_clusters={n_clusters}, cluster_std={cluster_std}")
-
-    # Set numpy error handling to ignore warnings during data generation and normalization
-    old_settings = np.seterr(all='ignore')
-
-    try:
-        # Generate data using mixture of Gaussians
+    logger.info(f"Running optimized experiment: n={n}, d={d}, epsilon={epsilon}")
+    logger.info(f"Optimizations: adaptive={use_adaptive}, eval={'optimized' if OPTIMIZED_EVALUATION else 'standard'}")
+    
+    # Generate or create data
+    if use_mixture_gaussians:
         X = generate_mixture_gaussians(n, d, n_clusters, cluster_std, seed)
-
-        # Check for any NaN or inf values in the generated data
-        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-            logger.warning("NaN or Inf values detected in generated data. Replacing with random values.")
-            rng = np.random.RandomState(seed)
-            mask = np.isnan(X) | np.isinf(X)
-            X[mask] = rng.randn(*X[mask].shape)
-
-        # Normalize with a robust approach to avoid division by zero
-        norms = np.linalg.norm(X, axis=1, keepdims=True)
-
-        # Replace zero or very small norms with 1.0 to avoid numerical issues
-        # Using a slightly larger threshold for better numerical stability
-        norms = np.where(norms < 1e-8, 1.0, norms)
-
-        # Normalize the data
-        X = X / norms
-
-        # Verify the normalization worked correctly
-        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-            logger.warning("NaN or Inf values detected after normalization. Fixing affected rows.")
-            # Replace problematic rows with random unit vectors
-            mask = np.any(np.isnan(X) | np.isinf(X), axis=1)
-            for i in np.where(mask)[0]:
-                v = rng.randn(d)
-                X[i] = v / np.maximum(np.linalg.norm(v), 1e-8)
-    except Exception as e:
-        logger.error(f"Error during data generation and normalization: {e}")
-        # Fallback to a simpler approach if anything goes wrong
-        X = np.random.RandomState(seed).randn(n, d)
-        norms = np.linalg.norm(X, axis=1, keepdims=True) + 1e-8
-        X /= norms
-
-    # Restore numpy error settings
-    np.seterr(**old_settings)
-
-    k = min(jll_dimension(n, epsilon), d)
-    logger.info(f"Chosen dimension k={k}")
-
-    soft_orig = softmax(X)
+    else:
+        np.random.seed(seed)
+        X = np.random.randn(n, d)
+    
+    # Normalize to unit sphere with numerical stability
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    
+    # Use robust normalization to prevent numerical issues
+    # Prevent division by very small numbers
+    safe_norms = np.where(norms > 1e-10, norms, 1.0)  # Replace small norms with 1.0
+    X_normalized = X / safe_norms
+    
+    # For vectors that had very small norms, replace with small random vectors
+    small_norm_mask = (norms <= 1e-10).flatten()
+    if np.any(small_norm_mask):
+        np.random.seed(seed)  # Ensure reproducibility
+        X_normalized[small_norm_mask] = np.random.randn(np.sum(small_norm_mask), d) * 1e-6
+        
+    X = X_normalized
+    
+    # Calculate target dimension with optional adaptation
+    if use_adaptive:
+        logger.info("Using adaptive dimension selection...")
+        k_adaptive = adaptive_jll_dimension(X, epsilon, max_iterations=5)
+        k_theoretical = jll_dimension(n, epsilon)
+        k = min(k_adaptive, d)
+        logger.info(f"Adaptive dimension k={k} (theoretical={k_theoretical}, improvement={k_theoretical-k})")
+    else:
+        k = min(jll_dimension(n, epsilon), d)
+        logger.info(f"Theoretical dimension k={k}")
+    
+    # Estimate intrinsic dimensionality for reference
+    intrinsic_dim = estimate_data_intrinsic_dimension(X)
+    logger.info(f"Estimated intrinsic dimension: {intrinsic_dim}")
+    
+    # Default methods - include all 6 methods
+    if methods is None:
+        methods = ['pca', 'jll', 'gaussian', 'pocs', 'poincare', 'spherical']
+        if UMAP_AVAILABLE:
+            methods.append('umap')
+    
     results = {}
-
-    # PCA
-    logger.info("Running PCA...")
-    Y, rt = run_pca(X, k, seed)
-    md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-    results['PCA'] = dict(mean_distortion=md, max_distortion=xd,
-                           rank_correlation=rank_corr(D1, D2),
-                           **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                           runtime=rt)
-
-    # JLL
-    logger.info("Running JLL projection...")
-    Y, rt = run_jll(X, k, seed)
-    md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-    results['JLL'] = dict(mean_distortion=md, max_distortion=xd,
-                           rank_correlation=rank_corr(D1, D2),
-                           **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                           runtime=rt)
-
-    # Convex + JLL
-    if use_convex:
-        logger.info("Running Convex-Hull Projection...")
-        Y, rt = run_convex(X, k, seed)
-        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-        results['Convex'] = dict(mean_distortion=md, max_distortion=xd,
-                                rank_correlation=rank_corr(D1, D2),
-                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                                runtime=rt)
-
-    # UMAP
-    logger.info("Running UMAP...")
-    Y, rt = run_umap(X, k, seed)
-    md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-    results['UMAP'] = dict(mean_distortion=md, max_distortion=xd,
-                            rank_correlation=rank_corr(D1, D2),
-                            **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                            runtime=rt)
-
-    # Poincare
-    if use_poincare:
-        logger.info("Running Poincare embedding...")
-        Y, rt = run_poincare(X, k, seed, c=1.0)
-        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-        results['Poincare'] = dict(mean_distortion=md, max_distortion=xd,
-                                rank_correlation=rank_corr(D1, D2),
-                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                                runtime=rt)
-
-    # Spherical
-    if use_spherical:
-        logger.info("Running Spherical embedding...")
-        Y, rt = run_spherical(X, k, seed)
-        md, xd, D1, D2 = compute_distortion_sample(X, Y, sample_size, seed)
-        results['Spherical'] = dict(mean_distortion=md, max_distortion=xd,
-                                rank_correlation=rank_corr(D1, D2),
-                                **dict(zip(['kl_divergence', 'l1'], dist_stats(soft_orig, Y))),
-                                runtime=rt)
-
-    # Elliptic (not implemented yet)
-    if use_elliptic:
-        logger.warning("Elliptic embedding not implemented yet. Skipping.")
-
+    
+    # Run each method
+    for method in methods:
+        logger.info(f"Running {method}...")
+        
+        if method == 'pca':
+            Y, runtime = run_pca(X, k, seed)
+        elif method == 'jll':
+            # Use optimized JLL with intelligent method selection
+            Y, runtime = run_jll(X, k, seed, method='auto')
+        elif method == 'gaussian':
+            Y, runtime = run_gaussian_projection(X, k, seed)
+        elif method == 'umap':
+            Y, runtime = run_umap(X, k, seed)
+        elif method == 'pocs':
+            Y, runtime = run_pocs(X, k, seed)
+        elif method == 'poincare':
+            Y, runtime = run_poincare(X, k, seed)
+        elif method == 'spherical':
+            Y, runtime = run_spherical(X, k, seed)
+        else:
+            logger.warning(f"Unknown method: {method}")
+            continue
+            
+        # Evaluate with optimized or standard functions
+        if use_optimized_eval and OPTIMIZED_EVALUATION:
+            # Use high-performance evaluation
+            mean_dist, max_dist, _, _ = compute_distortion(X, Y, sample_size=sample_size)
+            rank_corr = rank_correlation(X, Y, sample_size=sample_size)
+        else:
+            # Fall back to standard evaluation
+            metrics = evaluate_projection(X, Y, sample_size)
+            mean_dist = metrics['mean_distortion']
+            max_dist = metrics['max_distortion'] 
+            rank_corr = metrics['rank_correlation']
+        
+        # Compile results
+        result = {
+            'mean_distortion': float(mean_dist),
+            'max_distortion': float(max_dist),
+            'rank_correlation': float(rank_corr),
+            'runtime': float(runtime),
+            'compression_ratio': float(d/k),
+            'optimized_evaluation': OPTIMIZED_EVALUATION and use_optimized_eval
+        }
+        results[method.upper()] = result
+    
+    # Add metadata
+    results['_metadata'] = {
+        'n': n,
+        'd': d,
+        'k': k,
+        'epsilon': epsilon,
+        'intrinsic_dimension': intrinsic_dim,
+        'adaptive_used': use_adaptive,
+        'optimized_eval_available': OPTIMIZED_EVALUATION
+    }
+    
     return results
 
+# Simple interface functions for backward compatibility
+def run_jll_simple(X, k, seed=42):
+    """Simple JLL projection without timing."""
+    Y, _ = run_jll(X, k, seed)
+    return Y
+
+def run_pca_simple(X, k, seed=42):
+    """Simple PCA without timing."""
+    Y, _ = run_pca(X, k, seed)
+    return Y
+
+def run_umap_simple(X, k, seed=42):
+    """Simple UMAP without timing."""
+    Y, _ = run_umap(X, k, seed)
+    return Y
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--n', type=int, default=5000)
-    parser.add_argument('--d', type=int, default=1200)
-    parser.add_argument('--epsilon', type=float, default=0.2)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--sample_size', type=int, default=2000)
-    parser.add_argument('--use_convex', action='store_true')
-    parser.add_argument('--n_clusters', type=int, default=10, help='Number of Gaussian clusters')
-    parser.add_argument('--cluster_std', type=float, default=0.5, help='Cluster standard deviation')
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run dimensionality reduction experiments")
+    parser.add_argument('--n', type=int, default=1000, help="Number of points")
+    parser.add_argument('--d', type=int, default=100, help="Original dimension")
+    parser.add_argument('--epsilon', type=float, default=0.2, help="JLL epsilon")
+    parser.add_argument('--seed', type=int, default=42, help="Random seed")
+    parser.add_argument('--sample_size', type=int, default=2000, help="Sample size for evaluation")
+    parser.add_argument('--methods', nargs='+', default=None, help="Methods to run")
+    parser.add_argument('--simple-data', action='store_true', help="Use simple random data instead of mixture")
+    
     args = parser.parse_args()
-
-    res = run_experiment(
-        args.n, args.d, args.epsilon, args.seed, args.sample_size,
-        args.use_convex, args.n_clusters, args.cluster_std,
-        use_poincare=False, use_spherical=False, use_elliptic=False
+    
+    results = run_experiment(
+        n=args.n,
+        d=args.d, 
+        epsilon=args.epsilon,
+        seed=args.seed,
+        sample_size=args.sample_size,
+        methods=args.methods,
+        use_mixture_gaussians=not args.simple_data
     )
-    for name, m in res.items():
-        logger.info(f"=== {name} ===")
-        for k, v in m.items():
-            logger.info(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
+    
+    print("\nResults:")
+    print("=" * 50)
+    for method, metrics in results.items():
+        print(f"\n{method}:")
+        for key, value in metrics.items():
+            if isinstance(value, float):
+                print(f"  {key}: {value:.4f}")
+            else:
+                print(f"  {key}: {value}")
