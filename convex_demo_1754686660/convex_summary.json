@@ -1,0 +1,19 @@
+{
+  "n": 200,
+  "d": 32,
+  "k_candidates": 16,
+  "batch_size": 256,
+  "use_float32": true,
+  "Y_proj_shape": [
+    200,
+    32
+  ],
+  "alphas_shape": [
+    200,
+    55
+  ],
+  "V_shape": [
+    55,
+    32
+  ]
+}

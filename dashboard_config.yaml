@@ -1,0 +1,150 @@
+# OrthoReduce Dashboard Configuration
+# This file configures the interactive dashboard system
+
+# Server Configuration
+host: localhost                    # Dashboard host address
+port: 8501                        # Port for dashboard server
+max_upload_size: 200              # Maximum file upload size in MB
+
+# Directory Configuration  
+results_dir: experiment_results    # Directory containing experiment results
+cache_dir: dashboard_cache        # Directory for dashboard cache files
+
+# Dashboard Features
+auto_refresh: true                # Enable automatic page refresh
+refresh_interval: 30              # Refresh interval in seconds
+debug: false                      # Enable debug mode
+theme: light                      # UI theme: light or dark
+verbose_logging: true            # Enable detailed logging
+
+# Real-time Monitoring
+enable_monitoring: true           # Enable experiment monitoring
+enable_real_time: true           # Enable real-time updates
+monitor_interval: 10             # Monitoring check interval (seconds)
+
+# Performance Settings
+cache_duration: 3600             # Cache duration in seconds (1 hour)
+max_embedding_points: 10000      # Maximum points for embedding visualization
+sample_large_datasets: true      # Automatically sample large datasets
+parallel_processing: true        # Enable parallel processing where possible
+
+# Visualization Settings
+visualization:
+  default_plot_height: 600       # Default plot height in pixels
+  enable_3d: true               # Enable 3D visualizations
+  point_size: 6                 # Default scatter plot point size
+  line_width: 2                 # Default line width
+  color_palette: viridis        # Default color palette
+  high_dpi: true               # Enable high-DPI rendering
+
+# Dashboard Behavior
+dashboard_settings:
+  default_view: overview          # Default page on load
+  show_advanced_metrics: true    # Show advanced quality metrics
+  enable_exports: true           # Enable export functionality
+  cache_embeddings: true         # Cache embedding data
+  auto_save_selections: false    # Auto-save point selections
+  show_help_tooltips: true      # Show help tooltips
+  enable_keyboard_shortcuts: true # Enable keyboard navigation
+
+# Export Settings
+export:
+  default_format: json           # Default export format
+  include_metadata: true         # Include metadata in exports
+  compress_exports: true         # Compress large exports
+  max_export_size_mb: 500       # Maximum export size in MB
+
+# Method Display Configuration
+methods:
+  default_colors:                # Default colors for methods
+    JLL: "#66c2a5"              # Teal
+    PCA: "#fc8d62"              # Orange
+    GAUSSIAN: "#8da0cb"         # Purple
+    UMAP: "#e78ac3"             # Pink
+    POCS: "#a6d854"             # Green
+    Poincare: "#ffd92f"         # Yellow
+    Spherical: "#e5c494"        # Tan
+  
+  display_names:                 # Human-readable method names
+    JLL: "Johnson-Lindenstrauss"
+    PCA: "Principal Component Analysis"
+    GAUSSIAN: "Gaussian Random Projection"
+    UMAP: "Uniform Manifold Approximation"
+    POCS: "Convex Hull Projection"
+    Poincare: "Poincaré Embedding"
+    Spherical: "Spherical Embedding"
+
+# Quality Thresholds
+quality_thresholds:
+  excellent:                     # Thresholds for excellent quality
+    min_correlation: 0.95
+    max_distortion: 0.1
+  good:                          # Thresholds for good quality
+    min_correlation: 0.90
+    max_distortion: 0.2
+  fair:                          # Thresholds for fair quality
+    min_correlation: 0.80
+    max_distortion: 0.4
+
+# Advanced Analytics
+analytics:
+  enable_insights: true          # Enable automated insights
+  enable_recommendations: true   # Enable method recommendations
+  statistical_tests: true       # Enable statistical significance testing
+  convergence_analysis: true    # Enable convergence analysis
+  parameter_sensitivity: true   # Enable parameter sensitivity analysis
+
+# Security Settings (for production deployment)
+security:
+  enable_cors: false            # Enable CORS for cross-origin requests
+  enable_xsrf_protection: true  # Enable XSRF protection
+  max_request_size: 200         # Maximum request size in MB
+  session_timeout: 3600         # Session timeout in seconds
+
+# Database Configuration (for persistent storage)
+database:
+  enabled: false                # Enable database storage
+  type: sqlite                  # Database type: sqlite, postgresql
+  path: dashboard.db           # Database file path (SQLite)
+  # For PostgreSQL:
+  # host: localhost
+  # port: 5432
+  # database: orthoreduce
+  # username: user
+  # password: pass
+
+# Notification Settings
+notifications:
+  enabled: false                # Enable notifications
+  email:                        # Email notifications
+    enabled: false
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    username: ""
+    password: ""
+    recipients: []
+  slack:                        # Slack notifications
+    enabled: false
+    webhook_url: ""
+    channel: "#orthoreduce"
+
+# Custom Extensions
+extensions:
+  custom_metrics: []            # List of custom metric modules
+  custom_visualizations: []     # List of custom visualization modules
+  plugins: []                   # List of plugin modules
+
+# Logging Configuration
+logging:
+  level: INFO                   # Log level: DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: dashboard.log          # Log file path
+  max_size_mb: 10             # Maximum log file size
+  backup_count: 5             # Number of log file backups
+
+# Development Settings (for developers)
+development:
+  hot_reload: false           # Enable hot reload for development
+  show_debug_info: false      # Show debug information in UI
+  enable_profiling: false     # Enable performance profiling
+  mock_data: false           # Use mock data for testing

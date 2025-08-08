@@ -3,57 +3,60 @@
     "mean_distortion": 0.14335603620499437,
     "max_distortion": 0.518629861809625,
     "rank_correlation": 0.9254752392577072,
-    "runtime": 0.003228902816772461,
+    "runtime": 0.00020360946655273438,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   },
   "PCA": {
     "mean_distortion": 0.029915222278880108,
     "max_distortion": 0.4232844284747376,
     "rank_correlation": 0.9982914400490205,
-    "runtime": 0.0009708404541015625,
+    "runtime": 0.0009069442749023438,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   },
   "GAUSSIAN": {
     "mean_distortion": 0.8576712421051012,
     "max_distortion": 2.210619315056869,
     "rank_correlation": 0.9042717080143403,
-    "runtime": 0.000982046127319336,
+    "runtime": 0.0008130073547363281,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   },
   "POCS": {
-    "mean_distortion": 0.25347261519787334,
-    "max_distortion": 2.022623028691739,
-    "rank_correlation": 0.6450289535406056,
-    "runtime": 0.0027687549591064453,
+    "mean_distortion": 0.34351082750055795,
+    "max_distortion": 0.9870325081279138,
+    "rank_correlation": 0.7383275358662983,
+    "runtime": 30.994549036026,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   },
-  "POINCARE": {
+  "Poincare": {
     "mean_distortion": 0.13943978161412998,
     "max_distortion": 0.8780911754116285,
     "rank_correlation": 0.8311355477239242,
-    "runtime": 0.0002410411834716797,
+    "runtime": 0.0030231475830078125,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   },
-  "SPHERICAL": {
+  "Spherical": {
     "mean_distortion": 0.13848420920600368,
     "max_distortion": 1.0134994713169518,
     "rank_correlation": 0.8316557210837914,
-    "runtime": 0.00016307830810546875,
+    "runtime": 0.0002429485321044922,
     "compression_ratio": 1.1904761904761905,
-    "optimized_evaluation": true
-  },
-  "_metadata": {
-    "n": 500,
-    "d": 50,
-    "k": 42,
-    "epsilon": 0.2,
-    "intrinsic_dimension": 35,
-    "adaptive_used": true,
-    "optimized_eval_available": true
+    "optimized_evaluation": true,
+    "kl_divergence": 0.0,
+    "l1": 0.0
   }
 }

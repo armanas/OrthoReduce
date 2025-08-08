@@ -1,0 +1,36 @@
+{
+  "experiment_results": {
+    "JLL": {
+      "mean_distortion": 2.8354917856332824e-16,
+      "max_distortion": 4.93939510631375e-15,
+      "rank_correlation": 0.9999999999999999,
+      "runtime": 0.0001289844512939453,
+      "compression_ratio": 1.0,
+      "optimized_evaluation": true,
+      "kl_divergence": 0.0,
+      "l1": 0.0
+    },
+    "PCA": {
+      "mean_distortion": 8.275987373788725e-16,
+      "max_distortion": 7.175998582579731e-15,
+      "rank_correlation": 0.9999999999999999,
+      "runtime": 0.0002760887145996094,
+      "compression_ratio": 1.0,
+      "optimized_evaluation": true,
+      "kl_divergence": 0.0,
+      "l1": 0.0
+    }
+  },
+  "plot_files": {},
+  "_metadata": {
+    "dataset_size": 100,
+    "dimensions": 20,
+    "epsilon": 0.2,
+    "methods": [
+      "jll",
+      "pca"
+    ],
+    "enhanced_features": "Advanced Plots, Comprehensive Eval, Calibration",
+    "output_directory": "test_integration_final"
+  }
+}

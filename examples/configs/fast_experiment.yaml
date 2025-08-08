@@ -1,0 +1,109 @@
+name: fast_staged_optimization
+description: Fast staged optimization experiment optimized for speed
+version: "1.0"
+created_at: "2024-01-15T10:00:00"
+
+# Data configuration
+data_source: synthetic
+data_params:
+  n_samples: 500
+  n_features: 200
+  n_components: 20
+  noise_level: 0.1
+
+# Global experiment settings
+random_seed: 42
+n_runs: 1
+validation_split: 0.2
+cross_validation_folds: 3
+
+# Pipeline stages configuration
+preprocessing:
+  name: preprocessing
+  enabled: true
+  pca_components: auto
+  standardization: zscore
+  whitening: false
+  denoising_method: none
+  l2_normalize: false
+  cosine_distance_screening: true
+  adaptive_pipeline: false
+  parameters: {}
+
+convex_optimization:
+  name: convex_optimization
+  enabled: true
+  k_candidates_grid: [64]
+  lambda_grid: [0.0001]
+  tolerance_grid: [balanced]
+  objective_types: [quadratic]
+  use_float64: false
+  batch_size: 1024
+  candidate_normalization: none
+  grid_search_cv: 3
+  parameters: {}
+
+geometric_embeddings:
+  name: geometric_embeddings
+  enabled: true
+  spherical_config:
+    methods: [fast]
+    loss_types: [mds_geodesic]
+    max_iter: 100
+    learning_rates: [0.01]
+    adaptive_radius: true
+    hemisphere_constraint: true
+  poincare_config:
+    curvatures: [1.0]
+    learning_rates: [0.01]
+    n_epochs: 50
+    optimizers: [radam]
+    loss_functions: [stress]
+    init_methods: [pca]
+    regularization: 0.01
+  riemannian_optimization: true
+  parameters: {}
+
+calibration:
+  name: calibration
+  enabled: true
+  methods: [procrustes, isotonic]
+  isotonic_params:
+    sample_sizes: [null]
+    increasing: true
+    out_of_bounds: clip
+  procrustes_params:
+    scaling: true
+    reflection: false
+  local_correction_params:
+    k_neighbors_grid: [10]
+    adaptive_k: true
+    reg_strengths: [1.0e-06]
+  apply_to_all_embeddings: true
+  parameters: {}
+
+# Baseline methods for comparison
+baseline_methods: [pca, jll, umap]
+baseline_params: {}
+
+# Evaluation configuration
+evaluation_metrics: [rank_correlation, distortion, nn_overlap, stress]
+statistical_tests: [paired_t_test, wilcoxon, mann_whitney]
+
+# Output configuration
+output_dir: experiments/fast
+save_intermediate_results: false
+save_embeddings: true
+generate_plots: false
+plot_formats: [png]
+
+# Computational resources
+n_jobs: -1
+memory_limit_gb: null
+timeout_hours: null
+use_gpu: false
+
+# Advanced options
+debug_mode: false
+verbose_logging: true
+save_intermediate_data: false

@@ -32,6 +32,11 @@ DEFAULT_EPSILON=0.2
 DEFAULT_OUTPUT_DIR="experiment_results"
 DEFAULT_METHODS="jll,pca,gaussian,pocs,poincare,spherical"
 
+# Convex projection defaults
+DEFAULT_CONVEX_K=64
+DEFAULT_CONVEX_BATCH=1024
+DEFAULT_CONVEX_FLOAT32=true
+
 # Available methods
 AVAILABLE_METHODS=("jll" "pca" "gaussian" "pocs" "poincare" "spherical")
 
@@ -46,6 +51,67 @@ print_color() {
     printf "${color}%s${NC}\n" "$*"
 }
 
+# Function to run only the optimized convex hull projection
+run_convex_only() {
+    local dataset_size="$1"
+    local dimensions="$2"
+    local output_dir="$3"
+    local convex_k="$4"
+    local convex_batch="$5"
+    local convex_float32="$6" # true/false
+
+    print_header
+    print_info "Starting optimized convex hull projection..."
+    echo
+
+    print_color "$WHITE" "📊 Convex Projection Configuration:"
+    printf "   Points (n):      %s\n" "$dataset_size"
+    printf "   Dimensions (d):  %s\n" "$dimensions"
+    printf "   k_candidates:    %s\n" "$convex_k"
+    printf "   batch_size:      %s\n" "$convex_batch"
+    printf "   float32:         %s\n" "$convex_float32"
+    echo
+
+    # Export args for Python step
+    OR_N="$dataset_size" OR_D="$dimensions" OR_K="$convex_k" OR_BATCH="$convex_batch" OR_F32="$convex_float32" OR_OUTPUT_DIR="$output_dir" \
+    python3 - <<'PY'
+import json, os, numpy as np
+from orthogonal_projection.convex_optimized import project_onto_convex_hull_qp
+
+n = int(os.environ.get('OR_N', '1000'))
+d = int(os.environ.get('OR_D', '64'))
+k = int(os.environ.get('OR_K', '64'))
+batch = int(os.environ.get('OR_BATCH', '1024'))
+use_f32 = os.environ.get('OR_F32', 'true').lower() == 'true'
+out_dir = os.environ['OR_OUTPUT_DIR']
+os.makedirs(out_dir, exist_ok=True)
+
+Y = np.random.randn(n, d).astype(np.float32 if use_f32 else np.float64)
+Y_proj, alphas, V = project_onto_convex_hull_qp(
+    Y,
+    k_candidates=k,
+    batch_size=batch,
+    use_float32=use_f32,
+)
+
+summary = {
+    'n': n,
+    'd': d,
+    'k_candidates': k,
+    'batch_size': batch,
+    'use_float32': use_f32,
+    'Y_proj_shape': tuple(Y_proj.shape),
+    'alphas_shape': tuple(alphas.shape),
+    'V_shape': tuple(V.shape),
+}
+with open(os.path.join(out_dir, 'convex_summary.json'), 'w') as f:
+    json.dump(summary, f, indent=2)
+print('Saved:', os.path.join(out_dir, 'convex_summary.json'))
+PY
+
+    print_success "🎉 Convex projection completed successfully!"
+    print_info "📁 Results saved in: $output_dir/convex_summary.json"
+}
 # Function to print info messages
 print_info() {
     print_color "$BLUE" "ℹ️  $*"
@@ -92,6 +158,13 @@ OPTIONS:
     -o, --output-dir DIR    Output directory (default: $DEFAULT_OUTPUT_DIR)
     --quick-test           Run small fast test (n=200, d=30)
     --full-benchmark       Run comprehensive benchmark with all methods
+    
+    # Optimized convex hull projection (optional fast path)
+    --convex-only          Run only the optimized convex hull projection on synthetic data
+    --convex-k K           Candidate vertices per point (default: $DEFAULT_CONVEX_K)
+    --convex-batch B       Batch size for b = V y (default: $DEFAULT_CONVEX_BATCH)
+    --convex-float32       Use float32 for speed (default)
+    --no-convex-float32    Use float64 for higher precision
     -h, --help             Show this help message and exit
 
 EXAMPLES:
@@ -303,6 +376,10 @@ main() {
     local output_dir="$DEFAULT_OUTPUT_DIR"
     local quick_test=false
     local full_benchmark=false
+    local convex_only=false
+    local convex_k="$DEFAULT_CONVEX_K"
+    local convex_batch="$DEFAULT_CONVEX_BATCH"
+    local convex_float32="$DEFAULT_CONVEX_FLOAT32"
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -337,6 +414,28 @@ main() {
                 ;;
             --full-benchmark)
                 full_benchmark=true
+                shift
+                ;;
+            --convex-only)
+                convex_only=true
+                shift
+                ;;
+            --convex-k)
+                convex_k="$2"
+                validate_numeric "$convex_k" "convex-k" 1
+                shift 2
+                ;;
+            --convex-batch)
+                convex_batch="$2"
+                validate_numeric "$convex_batch" "convex-batch" 1
+                shift 2
+                ;;
+            --convex-float32)
+                convex_float32=true
+                shift
+                ;;
+            --no-convex-float32)
+                convex_float32=false
                 shift
                 ;;
             -h|--help)
@@ -375,8 +474,12 @@ main() {
     # Create output directory
     create_output_dir "$output_dir"
     
-    # Run the experiment
-    run_experiment "$dataset_size" "$dimensions" "$epsilon" "$methods" "$output_dir"
+    # Run selected mode (env and output dir already prepared above)
+    if [[ "$convex_only" == true ]]; then
+        run_convex_only "$dataset_size" "$dimensions" "$output_dir" "$convex_k" "$convex_batch" "$convex_float32"
+    else
+        run_experiment "$dataset_size" "$dimensions" "$epsilon" "$methods" "$output_dir"
+    fi
 }
 
 # Check if script is being sourced or executed

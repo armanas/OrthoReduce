@@ -1,0 +1,109 @@
+name: comprehensive_staged_optimization
+description: Comprehensive staged optimization experiment with full hyperparameter search
+version: "1.0"
+created_at: "2024-01-15T10:00:00"
+
+# Data configuration
+data_source: synthetic
+data_params:
+  n_samples: 1000
+  n_features: 500
+  n_components: 50
+  noise_level: 0.1
+
+# Global experiment settings
+random_seed: 42
+n_runs: 5
+validation_split: 0.2
+cross_validation_folds: 10
+
+# Pipeline stages configuration
+preprocessing:
+  name: preprocessing
+  enabled: true
+  pca_components: auto
+  standardization: zscore
+  whitening: false
+  denoising_method: pca
+  l2_normalize: false
+  cosine_distance_screening: true
+  adaptive_pipeline: true
+  parameters: {}
+
+convex_optimization:
+  name: convex_optimization
+  enabled: true
+  k_candidates_grid: [32, 64, 128, 256]
+  lambda_grid: [1.0e-08, 1.0e-06, 0.0001, 0.01, 0.1]
+  tolerance_grid: [strict, balanced, loose]
+  objective_types: [quadratic, huber, epsilon_insensitive]
+  use_float64: false
+  batch_size: 1024
+  candidate_normalization: none
+  grid_search_cv: 3
+  parameters: {}
+
+geometric_embeddings:
+  name: geometric_embeddings
+  enabled: true
+  spherical_config:
+    methods: [riemannian, fast]
+    loss_types: [mds_geodesic, triplet, nca, hybrid]
+    max_iter: 1000
+    learning_rates: [0.005, 0.01, 0.02, 0.05]
+    adaptive_radius: true
+    hemisphere_constraint: true
+  poincare_config:
+    curvatures: [0.1, 0.5, 1.0, 2.0, 5.0]
+    learning_rates: [0.005, 0.01, 0.02]
+    n_epochs: 200
+    optimizers: [rsgd, radam]
+    loss_functions: [stress, triplet, nca]
+    init_methods: [pca, spectral]
+    regularization: 0.01
+  riemannian_optimization: true
+  parameters: {}
+
+calibration:
+  name: calibration
+  enabled: true
+  methods: [procrustes, isotonic, local]
+  isotonic_params:
+    sample_sizes: [null, 1000, 5000, 10000]
+    increasing: true
+    out_of_bounds: clip
+  procrustes_params:
+    scaling: true
+    reflection: false
+  local_correction_params:
+    k_neighbors_grid: [5, 10, 15, 20, 30]
+    adaptive_k: true
+    reg_strengths: [1.0e-08, 1.0e-06, 0.0001, 0.01, 0.1]
+  apply_to_all_embeddings: true
+  parameters: {}
+
+# Baseline methods for comparison
+baseline_methods: [pca, jll, umap, tsne, isomap]
+baseline_params: {}
+
+# Evaluation configuration
+evaluation_metrics: [rank_correlation, distortion, nn_overlap, stress, geodesic_stress]
+statistical_tests: [paired_t_test, wilcoxon, mann_whitney, kruskal_wallis, friedman]
+
+# Output configuration
+output_dir: experiments/comprehensive
+save_intermediate_results: true
+save_embeddings: true
+generate_plots: true
+plot_formats: [png, pdf]
+
+# Computational resources
+n_jobs: -1
+memory_limit_gb: null
+timeout_hours: null
+use_gpu: false
+
+# Advanced options
+debug_mode: false
+verbose_logging: true
+save_intermediate_data: false

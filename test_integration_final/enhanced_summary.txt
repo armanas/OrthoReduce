@@ -1,0 +1,33 @@
+OrthoReduce Enhanced Experiment Summary
+==================================================
+
+Experiment Configuration:
+-------------------------
+Dataset Size: 100
+Dimensions: 20
+Epsilon: 0.2
+Methods: jll, pca
+Enhanced Features: Advanced Plots, Comprehensive Eval, Calibration
+
+Method Performance:
+--------------------
+
+JLL:
+  mean_distortion: 0.000000
+  max_distortion: 0.000000
+  rank_correlation: 1.000000
+  runtime: 0.000129
+  compression_ratio: 1.000000
+  optimized_evaluation: 1.000000
+  kl_divergence: 0.000000
+  l1: 0.000000
+
+PCA:
+  mean_distortion: 0.000000
+  max_distortion: 0.000000
+  rank_correlation: 1.000000
+  runtime: 0.000276
+  compression_ratio: 1.000000
+  optimized_evaluation: 1.000000
+  kl_divergence: 0.000000
+  l1: 0.000000

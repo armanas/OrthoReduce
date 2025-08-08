@@ -7,3 +7,15 @@ umap-learn
 pyteomics
 pandas
 jupyter
+# Monitoring dependencies
+tqdm>=4.64.0
+psutil>=5.9.0
+# Dashboard dependencies
+streamlit>=1.28.0
+plotly>=5.15.0
+dash>=2.14.0
+colorcet>=3.0.1
+plotly-dash>=1.0.0
+# Optional dashboard enhancements  
+streamlit-plotly-events>=0.0.6
+streamlit-aggrid>=0.3.4

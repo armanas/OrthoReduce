@@ -1,0 +1,111 @@
+name: ms_staged_optimization
+description: Staged optimization experiment for mass spectrometry data
+version: "1.0"
+created_at: "2024-01-15T10:00:00"
+
+# Data configuration
+data_source: ms_data
+data_params:
+  mzml_path: data/sample.mzML
+  max_spectra: 1000
+  min_intensity: 10000.0
+  mz_range: [100, 2000]
+  rt_range: null
+  use_fingerprinting: true
+
+# Global experiment settings
+random_seed: 42
+n_runs: 3
+validation_split: 0.2
+cross_validation_folds: 5
+
+# Pipeline stages configuration
+preprocessing:
+  name: preprocessing
+  enabled: true
+  pca_components: auto
+  standardization: robust
+  whitening: false
+  denoising_method: pca
+  l2_normalize: true
+  cosine_distance_screening: true
+  adaptive_pipeline: true
+  parameters: {}
+
+convex_optimization:
+  name: convex_optimization
+  enabled: true
+  k_candidates_grid: [64, 128, 256]
+  lambda_grid: [1.0e-06, 0.0001, 0.01]
+  tolerance_grid: [balanced, loose]
+  objective_types: [huber]
+  use_float64: false
+  batch_size: 1024
+  candidate_normalization: none
+  grid_search_cv: 3
+  parameters: {}
+
+geometric_embeddings:
+  name: geometric_embeddings
+  enabled: true
+  spherical_config:
+    methods: [riemannian, fast]
+    loss_types: [mds_geodesic, hybrid]
+    max_iter: 500
+    learning_rates: [0.01, 0.02]
+    adaptive_radius: true
+    hemisphere_constraint: true
+  poincare_config:
+    curvatures: [1.0, 2.0, 5.0]
+    learning_rates: [0.01, 0.02]
+    n_epochs: 100
+    optimizers: [radam]
+    loss_functions: [stress]
+    init_methods: [pca]
+    regularization: 0.01
+  riemannian_optimization: true
+  parameters: {}
+
+calibration:
+  name: calibration
+  enabled: true
+  methods: [procrustes, isotonic, local]
+  isotonic_params:
+    sample_sizes: [null, 5000]
+    increasing: true
+    out_of_bounds: clip
+  procrustes_params:
+    scaling: true
+    reflection: false
+  local_correction_params:
+    k_neighbors_grid: [10, 20]
+    adaptive_k: true
+    reg_strengths: [1.0e-06, 0.0001]
+  apply_to_all_embeddings: true
+  parameters: {}
+
+# Baseline methods for comparison
+baseline_methods: [pca, jll, umap]
+baseline_params: {}
+
+# Evaluation configuration
+evaluation_metrics: [rank_correlation, distortion, nn_overlap, stress]
+statistical_tests: [paired_t_test, wilcoxon, mann_whitney]
+
+# Output configuration
+output_dir: experiments/ms_data
+save_intermediate_results: true
+save_embeddings: true
+generate_plots: true
+plot_formats: [png, pdf]
+
+# Computational resources
+n_jobs: -1
+memory_limit_gb: null
+timeout_hours: null
+use_gpu: false
+
+# Advanced options
+debug_mode: false
+verbose_logging: true
+save_intermediate_data: false

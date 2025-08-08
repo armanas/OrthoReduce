@@ -427,3 +427,57 @@ Optimization: {'Adaptive' if meta.get('adaptive_used', False) else 'Theoretical'
         logger.info(f"🖼️ Individual plots: {len(individual_plots)} files")
         
         return output_files
+    
+    def create_advanced_visualization_suite(self, results: Dict[str, Any], 
+                                           embeddings: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        """
+        Create comprehensive visualization suite using advanced plotting capabilities.
+        
+        This method integrates the new AdvancedPlotter with the existing visualization system
+        to provide enhanced plots with better styling, specialized embeddings, and interactive features.
+        
+        Parameters
+        ----------
+        results : dict
+            Experiment results from run_experiment()
+        embeddings : dict or None
+            Optional embeddings for enhanced visualization
+            
+        Returns
+        -------
+        dict
+            Dictionary mapping visualization types to file paths
+        """
+        try:
+            # Import advanced plotting (lazy import to avoid circular dependencies)
+            from .advanced_plotting import (
+                AdvancedPlotter, InteractivePlotter, create_evaluation_report
+            )
+            
+            logger.info("Creating advanced visualization suite...")
+            
+            # Create advanced evaluation report
+            advanced_output_dir = self.plots_dir / "advanced"
+            generated_files = create_evaluation_report(
+                results=results,
+                embeddings=embeddings,
+                output_dir=str(advanced_output_dir),
+                include_interactive=True
+            )
+            
+            # Update paths relative to main plots directory
+            for key, path in generated_files.items():
+                # Make paths relative to main output directory for consistency
+                rel_path = Path(path).relative_to(self.output_dir)
+                generated_files[key] = str(self.output_dir / rel_path)
+            
+            logger.info(f"✅ Advanced visualization suite created with {len(generated_files)} components")
+            
+            return generated_files
+            
+        except ImportError as e:
+            logger.warning(f"Advanced plotting not available: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to create advanced visualization suite: {e}")
+            return {}

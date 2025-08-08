@@ -32,7 +32,7 @@ try:
 except ImportError:
     from orthogonal_projection.evaluation import compute_distortion, rank_correlation
     OPTIMIZED_EVALUATION = False
-from orthogonal_projection.convex_optimized import project_onto_convex_hull_qp
+from orthogonal_projection.convex_optimized import project_onto_convex_hull_qp, project_onto_convex_hull_enhanced
 from orthogonal_projection.fingerprinting import match_frames_to_peptides
 
 def ensure_dir(path: str):
@@ -114,6 +114,20 @@ def main():
     parser.add_argument("--labels_csv", help="CSV file with peptide labels")
     parser.add_argument("--use_convex", action='store_true', help="Apply convex hull projection")
     
+    # Enhanced convex hull projection parameters
+    parser.add_argument("--convex_ridge_lambda", type=float, default=1e-6, 
+                       help="Ridge regularization for convex hull (1e-6 to 1e-3)")
+    parser.add_argument("--convex_solver_tol", type=float, default=1e-6,
+                       help="Solver tolerance for convex optimization")
+    parser.add_argument("--convex_objective", choices=['quadratic', 'huber', 'epsilon_insensitive'], 
+                       default='quadratic', help="Objective function type")
+    parser.add_argument("--convex_use_float64", action='store_true', 
+                       help="Use float64 for high-precision convex optimization")
+    parser.add_argument("--convex_normalization", choices=['none', 'l2', 'unit_sphere'], 
+                       default='none', help="Vertex normalization method")
+    parser.add_argument("--convex_solver_mode", choices=['strict', 'balanced', 'loose'], 
+                       default='balanced', help="Solver tolerance mode")
+    
     args = parser.parse_args()
     
     print("MS Pipeline - Simplified Version")
@@ -147,8 +161,17 @@ def main():
         
         # Optional convex hull projection
         if args.use_convex:
-            print("Applying convex hull projection...")
-            Y, alphas, vertices = project_onto_convex_hull_qp(Y)
+            print(f"Applying enhanced convex hull projection (mode: {args.convex_solver_mode}, "
+                  f"objective: {args.convex_objective}, ridge_λ: {args.convex_ridge_lambda:.1e})...")
+            Y, alphas, vertices = project_onto_convex_hull_enhanced(
+                Y,
+                ridge_lambda=args.convex_ridge_lambda,
+                solver_tol=args.convex_solver_tol,
+                objective_type=args.convex_objective,
+                use_float64=args.convex_use_float64,
+                candidate_normalization=args.convex_normalization,
+                solver_mode=args.convex_solver_mode
+            )
         
     except Exception as e:
         print(f"Error in dimensionality reduction: {e}")
